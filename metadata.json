@@ -1,0 +1,6 @@
+{
+  "name": "Sonic Scribe",
+  "description": "Hệ thống ghi âm và dịch thuật thông minh, tự động dịch thuật và tóm tắt bằng AI.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

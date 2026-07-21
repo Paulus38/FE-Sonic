@@ -1,0 +1,447 @@
+import React, { useState, useEffect, useCallback } from 'react';
+import Sidebar from './components/Sidebar';
+import FloatingPlayer from './components/FloatingPlayer';
+import LibraryView from './components/LibraryView';
+import DetailView from './components/DetailView';
+import LiveRecordView from './components/LiveRecordView';
+import SettingsView from './components/SettingsView';
+import DictionaryView from './components/DictionaryView';
+import AuthView from './components/AuthView';
+import { Recording, UserSettings, DictionaryItem } from './types';
+import {
+  dictionaryApi,
+  recordingsApi,
+  setToken,
+  usersApi,
+} from './lib/api';
+import {
+  Sparkles,
+  Languages,
+  BookOpen,
+  BarChart3,
+  HelpCircle,
+  Mic,
+} from 'lucide-react';
+
+const emptySettings: UserSettings = {
+  name: '',
+  email: '',
+  avatar: '',
+  primaryLang: 'Tiếng Việt',
+  secondaryLang: 'Tiếng Anh (US)',
+  sampleRate: 48,
+  aiNoiseCancellation: true,
+  theme: 'light',
+};
+
+export default function App() {
+  const [token, setTokenState] = useState<string | null>(
+    () => localStorage.getItem('sonic_token'),
+  );
+  const [bootstrapping, setBootstrapping] = useState(!!token);
+  const [recordings, setRecordings] = useState<Recording[]>([]);
+  const [settings, setSettings] = useState<UserSettings>(emptySettings);
+  const [dictionaryItems, setDictionaryItems] = useState<DictionaryItem[]>([]);
+  const [currentTab, setCurrentTab] = useState<string>('recordings');
+  const [selectedRecording, setSelectedRecording] = useState<Recording | null>(
+    null,
+  );
+  const [playingRecording, setPlayingRecording] = useState<Recording | null>(
+    null,
+  );
+  const [loadError, setLoadError] = useState('');
+  const [pendingDeleteRecording, setPendingDeleteRecording] = useState<Recording | null>(null);
+  const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
+  const refreshData = useCallback(async () => {
+    const [recs, dict, me] = await Promise.all([
+      recordingsApi.list(),
+      dictionaryApi.list(),
+      usersApi.me(),
+    ]);
+    setRecordings(
+      recs.items.filter(
+        (r) =>
+          !r.status ||
+          r.status === 'ready' ||
+          r.status === 'processing' ||
+          r.status === 'recording',
+      ),
+    );
+    setDictionaryItems(dict.items);
+    setSettings({
+      name: me.name,
+      email: me.email,
+      avatar: me.avatar || '',
+      primaryLang: me.primaryLang,
+      secondaryLang: me.secondaryLang,
+      sampleRate: me.sampleRate,
+      aiNoiseCancellation: me.aiNoiseCancellation,
+      theme: me.theme,
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!token) {
+      setBootstrapping(false);
+      return;
+    }
+    setBootstrapping(true);
+    refreshData()
+      .catch((err) => {
+        setLoadError(err instanceof Error ? err.message : 'Không tải được dữ liệu');
+        setToken(null);
+        setTokenState(null);
+      })
+      .finally(() => setBootstrapping(false));
+  }, [token, refreshData]);
+
+  useEffect(() => {
+    if (settings.theme === 'dark') {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+  }, [settings.theme]);
+
+  useEffect(() => {
+    if (!toast) return;
+    const timer = setTimeout(() => setToast(null), 2600);
+    return () => clearTimeout(timer);
+  }, [toast]);
+
+  if (!token) {
+    return (
+      <AuthView
+        onAuthenticated={(user, accessToken) => {
+          setToken(accessToken);
+          setTokenState(accessToken);
+          setSettings({
+            name: user.name,
+            email: user.email,
+            avatar: user.avatar || '',
+            primaryLang: user.primaryLang,
+            secondaryLang: user.secondaryLang,
+            sampleRate: user.sampleRate,
+            aiNoiseCancellation: user.aiNoiseCancellation,
+            theme: user.theme,
+          });
+        }}
+      />
+    );
+  }
+
+  if (bootstrapping) {
+    return (
+      <div className="h-screen w-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950 text-slate-600 text-sm font-bold">
+        Đang tải Sonic Scribe...
+      </div>
+    );
+  }
+
+  const handleSelectRecording = async (rec: Recording) => {
+    try {
+      const full = await recordingsApi.get(rec.id);
+      setSelectedRecording(full);
+      setCurrentTab('recording_detail');
+    } catch (err) {
+      setToast({
+        type: 'error',
+        message:
+          err instanceof Error
+            ? err.message
+            : 'Không tải được chi tiết transcript.',
+      });
+    }
+  };
+
+  const handleDeleteRecording = async (id: string) => {
+    const target = recordings.find((r) => r.id === id) || null;
+    if (!target) return;
+    setPendingDeleteRecording(target);
+  };
+
+  const confirmDeleteRecording = async () => {
+    const target = pendingDeleteRecording;
+    if (!target) return;
+    try {
+      await recordingsApi.remove(target.id);
+      setRecordings((prev) => prev.filter((r) => r.id !== target.id));
+      if (playingRecording?.id === target.id) setPlayingRecording(null);
+      if (selectedRecording?.id === target.id) {
+        setSelectedRecording(null);
+        setCurrentTab('recordings');
+      }
+      setToast({ type: 'success', message: 'Đã xóa bản ghi.' });
+    } catch (err) {
+      setToast({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Xóa thất bại',
+      });
+    } finally {
+      setPendingDeleteRecording(null);
+    }
+  };
+
+  const handleSaveNewRecording = async (newRec: Recording) => {
+    setRecordings((prev) => [newRec, ...prev.filter((r) => r.id !== newRec.id)]);
+    setCurrentTab('recordings');
+    setToast({
+      type: 'success',
+      message: newRec.hasAudio
+        ? 'Đã lưu bản ghi (có audio + transcript).'
+        : 'Đã lưu transcript (audio upload chưa thành công).',
+    });
+    try {
+      const recs = await recordingsApi.list();
+      setRecordings(
+      recs.items.filter(
+        (r) =>
+          !r.status ||
+          r.status === 'ready' ||
+          r.status === 'processing' ||
+          r.status === 'recording',
+      ),
+    );
+    } catch {
+      // keep optimistic list
+    }
+  };
+
+  const handleAddWordToDictionary = async (
+    item: Omit<DictionaryItem, 'id'>,
+  ) => {
+    const created = await dictionaryApi.create(item);
+    setDictionaryItems((prev) => [created, ...prev]);
+  };
+
+  const handleDeleteWordFromDictionary = async (id: string) => {
+    await dictionaryApi.remove(id);
+    setDictionaryItems((prev) => prev.filter((item) => item.id !== id));
+  };
+
+  const handleImportDuolingo = async (payload: {
+    jwtToken: string;
+    learningLanguage?: string;
+    nativeLanguage?: string;
+    limit?: number;
+  }) => {
+    const result = await dictionaryApi.importDuolingo(payload);
+    const dict = await dictionaryApi.list();
+    setDictionaryItems(dict.items);
+    return result;
+  };
+
+  const handleRegenerateSummary = async (recordingId: string) => {
+    const updated = await recordingsApi.summarize(recordingId);
+    setSelectedRecording(updated);
+    setRecordings((prev) => prev.map((r) => (r.id === updated.id ? updated : r)));
+    setToast({ type: 'success', message: 'Đã cập nhật tóm tắt AI.' });
+  };
+
+  const handleUpdateSettings = async (next: UserSettings) => {
+    setSettings(next);
+    await usersApi.updateSettings(next);
+  };
+
+  const renderContent = () => {
+    switch (currentTab) {
+      case 'recordings':
+        return (
+          <LibraryView
+            recordings={recordings}
+            settings={settings}
+            onSelectRecording={(rec) => void handleSelectRecording(rec)}
+            onPlay={setPlayingRecording}
+            onDelete={(id) => void handleDeleteRecording(id)}
+            onStartNewRecording={() => setCurrentTab('recording_live')}
+            setCurrentTab={setCurrentTab}
+          />
+        );
+      case 'recording_detail':
+        return selectedRecording ? (
+          <DetailView
+            recording={selectedRecording}
+            onBack={() => setCurrentTab('recordings')}
+            onAddWordToDictionary={(item) => void handleAddWordToDictionary(item)}
+            onRegenerateSummary={(id) => void handleRegenerateSummary(id)}
+          />
+        ) : (
+          <div className="flex-1 flex items-center justify-center p-8">
+            <p className="text-slate-500">Chưa chọn bản ghi</p>
+          </div>
+        );
+      case 'recording_live':
+        return (
+          <LiveRecordView
+            settings={settings}
+            token={token}
+            onSaveRecording={handleSaveNewRecording}
+            onCancel={() => setCurrentTab('recordings')}
+          />
+        );
+      case 'settings':
+        return (
+          <SettingsView
+            settings={settings}
+            onUpdateSettings={(s) => void handleUpdateSettings(s)}
+            setCurrentTab={setCurrentTab}
+            onLogout={() => {
+              setToken(null);
+              setTokenState(null);
+            }}
+          />
+        );
+      case 'dictionary':
+        return (
+          <DictionaryView
+            dictionaryItems={dictionaryItems}
+            onAddWord={(item) => void handleAddWordToDictionary(item)}
+            onDeleteWord={(id) => void handleDeleteWordFromDictionary(id)}
+            onImportDuolingo={(payload) => handleImportDuolingo(payload)}
+          />
+        );
+      case 'dashboard':
+        return (
+          <div className="flex-1 overflow-y-auto px-4 md:px-10 py-6 bg-slate-50 dark:bg-slate-950 pb-24">
+            <h2 className="text-xl font-extrabold mb-1">Tổng quan hoạt động</h2>
+            <p className="text-xs text-slate-500 font-bold mb-6">
+              {settings.name}
+            </p>
+            {loadError && (
+              <p className="text-xs text-rose-600 mb-4">{loadError}</p>
+            )}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="bg-white dark:bg-slate-900 p-5 rounded-2xl border flex items-center gap-4">
+                <Mic className="w-6 h-6 text-blue-600" />
+                <div>
+                  <p className="text-[10px] font-bold uppercase text-slate-500">
+                    Bản ghi
+                  </p>
+                  <p className="text-2xl font-black">{recordings.length}</p>
+                </div>
+              </div>
+              <div className="bg-white dark:bg-slate-900 p-5 rounded-2xl border flex items-center gap-4">
+                <BookOpen className="w-6 h-6 text-emerald-500" />
+                <div>
+                  <p className="text-[10px] font-bold uppercase text-slate-500">
+                    Từ vựng
+                  </p>
+                  <p className="text-2xl font-black">{dictionaryItems.length}</p>
+                </div>
+              </div>
+              <div className="bg-white dark:bg-slate-900 p-5 rounded-2xl border flex items-center gap-4">
+                <Sparkles className="w-6 h-6 text-purple-500" />
+                <div>
+                  <p className="text-[10px] font-bold uppercase text-slate-500">
+                    Song ngữ
+                  </p>
+                  <p className="text-2xl font-black">Realtime</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      case 'translations':
+        return (
+          <div className="flex-1 overflow-y-auto px-4 md:px-10 py-6 pb-24">
+            <h2 className="text-xl font-extrabold mb-4">Thư viện song ngữ</h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {recordings
+                .filter((r) => r.isTranslated)
+                .map((rec) => (
+                  <button
+                    key={rec.id}
+                    onClick={() => void handleSelectRecording(rec)}
+                    className="text-left bg-white dark:bg-slate-900 p-5 rounded-2xl border hover:border-blue-600"
+                  >
+                    <span className="text-[10px] font-extrabold text-blue-600 flex items-center gap-1">
+                      <Languages className="w-3.5 h-3.5" /> Song ngữ
+                    </span>
+                    <h3 className="font-extrabold mt-2">{rec.title}</h3>
+                    <p className="text-xs text-slate-500 mt-1 line-clamp-2">
+                      {rec.summary}
+                    </p>
+                  </button>
+                ))}
+            </div>
+          </div>
+        );
+      case 'analytics':
+        return (
+          <div className="flex-1 overflow-y-auto px-4 md:px-10 py-6 pb-24">
+            <h2 className="text-xl font-extrabold mb-4 flex items-center gap-2">
+              <BarChart3 className="w-6 h-6 text-blue-600" /> Phân tích
+            </h2>
+            <p className="text-sm text-slate-500">
+              Tổng {recordings.length} bản ghi · {dictionaryItems.length} từ
+              vựng đã lưu.
+            </p>
+          </div>
+        );
+      case 'help':
+        return (
+          <div className="flex-1 flex flex-col items-center justify-center text-center p-8 pb-24">
+            <HelpCircle className="w-14 h-14 text-blue-500 mb-4" />
+            <h2 className="font-extrabold">Sonic Scribe</h2>
+            <p className="text-sm text-slate-500 max-w-sm mt-2">
+              Nhấn Ghi âm mới, nói tiếng Anh — hệ thống chuyển lời và dịch Việt
+              realtime, rồi lưu để ôn tập.
+            </p>
+          </div>
+        );
+      default:
+        return null;
+    }
+  };
+
+  return (
+    <div className="flex h-screen w-screen overflow-hidden bg-slate-50 dark:bg-slate-950 font-sans">
+      <Sidebar currentTab={currentTab} setCurrentTab={setCurrentTab} />
+      <main className="flex-1 flex flex-col h-screen overflow-hidden relative">
+        {renderContent()}
+        {playingRecording && (
+          <FloatingPlayer
+            recording={playingRecording}
+            onClose={() => setPlayingRecording(null)}
+          />
+        )}
+      </main>
+      {pendingDeleteRecording && (
+        <div className="fixed inset-0 z-[70] bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 space-y-4">
+            <h3 className="text-sm font-extrabold text-slate-900 dark:text-white">
+              Xóa bản ghi này?
+            </h3>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              Bản ghi <strong>{pendingDeleteRecording.title}</strong> sẽ bị xóa vĩnh viễn.
+            </p>
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                onClick={() => setPendingDeleteRecording(null)}
+                className="px-4 py-2 text-xs font-bold rounded-xl border border-slate-200 dark:border-slate-700"
+              >
+                Hủy
+              </button>
+              <button
+                onClick={() => void confirmDeleteRecording()}
+                className="px-4 py-2 text-xs font-bold rounded-xl bg-rose-600 hover:bg-rose-700 text-white"
+              >
+                Xóa
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {toast && (
+        <div
+          className={`fixed top-4 left-1/2 -translate-x-1/2 z-[80] px-4 py-2.5 rounded-full text-xs font-bold text-white shadow-lg ${
+            toast.type === 'success' ? 'bg-emerald-600' : 'bg-rose-600'
+          }`}
+        >
+          {toast.message}
+        </div>
+      )}
+    </div>
+  );
+}
