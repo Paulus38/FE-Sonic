@@ -8,32 +8,52 @@ import {
   Cloud, 
   HelpCircle, 
   User, 
-  Sparkles,
-  Settings
+  Settings,
+  Zap,
+  Shield,
 } from 'lucide-react';
+
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+  if (bytes < 1024) return `${Math.round(bytes)} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) {
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
 
 interface SidebarProps {
   currentTab: string;
   setCurrentTab: (tab: string) => void;
-  storageUsed?: number; // GB
-  storageTotal?: number; // GB
+  storageUsedBytes?: number;
+  storageQuotaBytes?: number;
+  storageLoading?: boolean;
+  isAdmin?: boolean;
 }
 
 export default function Sidebar({ 
   currentTab, 
   setCurrentTab, 
-  storageUsed = 7.5, 
-  storageTotal = 10 
+  storageUsedBytes = 0,
+  storageQuotaBytes = 1024 * 1024 * 1024,
+  storageLoading = false,
+  isAdmin = false,
 }: SidebarProps) {
   const navItems = [
     { id: 'dashboard', label: 'Tổng quan', labelEng: 'Dashboard', icon: LayoutDashboard },
     { id: 'recordings', label: 'Bản ghi', labelEng: 'Recordings', icon: Mic },
     { id: 'translations', label: 'Dịch thuật', labelEng: 'Translations', icon: Languages },
     { id: 'dictionary', label: 'Từ điển', labelEng: 'Dictionary', icon: BookOpen },
+    { id: 'ai_usage', label: 'AI Tokens', labelEng: 'Usage', icon: Zap },
     { id: 'analytics', label: 'Phân tích', labelEng: 'Analytics', icon: BarChart3 },
+    ...(isAdmin
+      ? [{ id: 'admin', label: 'Quản trị', labelEng: 'RBAC', icon: Shield }]
+      : []),
   ];
 
-  const storagePercentage = (storageUsed / storageTotal) * 100;
+  const quota = storageQuotaBytes > 0 ? storageQuotaBytes : 1;
+  const storagePercentage = Math.min(100, (storageUsedBytes / quota) * 100);
 
   // Navigation items optimized for mobile bottom bar (max 5 items)
   const mobileNavItems = [
@@ -97,7 +117,9 @@ export default function Sidebar({
                 />
               </div>
               <p className="text-xs font-semibold text-slate-600 dark:text-slate-300">
-                {storageUsed}GB / {storageTotal}GB ({Math.round(storagePercentage)}%)
+                {storageLoading
+                  ? 'Đang đo cloud...'
+                  : `${formatBytes(storageUsedBytes)} / ${formatBytes(storageQuotaBytes)} (${Math.round(storagePercentage)}%)`}
               </p>
             </div>
             <div className="absolute -right-4 -bottom-4 opacity-5 group-hover:scale-110 transition-transform duration-300">
@@ -118,7 +140,6 @@ export default function Sidebar({
               <HelpCircle className="w-5 h-5 text-slate-500 dark:text-slate-400" />
               <span>Hỗ trợ (Help)</span>
             </button>
-            
             <button
               onClick={() => setCurrentTab('settings')}
               className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-semibold transition-all duration-200 text-left ${
@@ -128,42 +149,29 @@ export default function Sidebar({
               }`}
             >
               <User className="w-5 h-5 text-slate-500 dark:text-slate-400" />
-              <span>Tài khoản (Account)</span>
+              <span>Hồ sơ & Cài đặt</span>
             </button>
           </div>
-
-          {/* Upgrade to Pro Button */}
-          {currentTab !== 'settings' && (
-            <button 
-              onClick={() => setCurrentTab('settings')}
-              className="w-full bg-slate-950 hover:bg-slate-900 dark:bg-indigo-950 dark:hover:bg-indigo-900 text-white py-2.5 rounded-lg text-sm font-semibold flex items-center justify-center gap-2 transition-all shadow-sm active:scale-95"
-            >
-              <Sparkles className="w-4 h-4 text-amber-400 fill-amber-400 animate-bounce" />
-              <span>Nâng cấp Pro</span>
-            </button>
-          )}
         </div>
       </aside>
 
-      {/* MOBILE BOTTOM NAVIGATION BAR: Visible only on Mobile (<md) */}
+      {/* MOBILE BOTTOM NAV */}
       <nav className="md:hidden fixed bottom-0 left-0 right-0 h-16 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-t border-slate-200 dark:border-slate-800 flex items-center justify-around z-40 px-2 shadow-[0_-4px_24px_rgba(0,0,0,0.06)] pb-safe transition-colors">
         {mobileNavItems.map((item) => {
           const IconComponent = item.icon;
-          const isActive = currentTab === item.id || (item.id === 'recordings' && currentTab === 'recording_detail') || (item.id === 'recordings' && currentTab === 'recording_live');
+          const isActive = currentTab === item.id || (item.id === 'recordings' && (currentTab === 'recording_detail' || currentTab === 'recording_live'));
           return (
             <button
               key={item.id}
               onClick={() => setCurrentTab(item.id)}
-              className={`flex flex-col items-center justify-center flex-1 py-1 px-2 h-full transition-all duration-200 ${
-                isActive 
-                  ? 'text-blue-600 dark:text-blue-400 font-bold scale-105' 
-                  : 'text-slate-500 dark:text-slate-400 font-semibold'
+              className={`flex flex-col items-center justify-center gap-0.5 min-w-[56px] min-h-[48px] rounded-xl px-2 py-1 transition-colors ${
+                isActive
+                  ? 'text-blue-600 dark:text-blue-400'
+                  : 'text-slate-400 dark:text-slate-500'
               }`}
             >
-              <div className={`p-1 rounded-xl transition-all ${isActive ? 'bg-blue-50 dark:bg-blue-950/40' : ''}`}>
-                <IconComponent className="w-5 h-5" />
-              </div>
-              <span className="text-[10px] mt-0.5 tracking-tight leading-none">{item.label}</span>
+              <IconComponent className={`w-5 h-5 ${isActive ? 'stroke-[2.5]' : ''}`} />
+              <span className="text-[10px] font-bold">{item.label}</span>
             </button>
           );
         })}

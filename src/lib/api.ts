@@ -77,11 +77,77 @@ export const usersApi = {
     apiRequest<import('../types').UserSettings & { id: string }>(
       '/api/v1/users/me',
     ),
+  storage: () =>
+    apiRequest<{
+      usedBytes: number;
+      quotaBytes: number;
+      fileCount: number;
+      provider: string;
+      source: string;
+    }>('/api/v1/users/me/storage'),
   updateSettings: (body: Partial<import('../types').UserSettings>) =>
     apiRequest('/api/v1/users/me/settings', {
       method: 'PATCH',
       body: JSON.stringify(body),
     }),
+};
+
+export const aiApi = {
+  usage: () =>
+    apiRequest<{
+      summary: import('../types').AiUsageSummary;
+      events: import('../types').AiUsageEvent[];
+    }>('/api/v1/ai/usage'),
+  usageAll: () =>
+    apiRequest<{ items: import('../types').AiUsageSummary[] }>(
+      '/api/v1/ai/usage/all',
+    ),
+};
+
+export const adminApi = {
+  listUsers: () =>
+    apiRequest<
+      Array<import('../types').UserSettings & { id: string; role: string }>
+    >('/api/v1/admin/users'),
+  createUser: (body: {
+    name: string;
+    email: string;
+    password: string;
+    role?: 'user' | 'admin';
+  }) =>
+    apiRequest<import('../types').UserSettings & { id: string; role: string }>(
+      '/api/v1/admin/users',
+      {
+        method: 'POST',
+        body: JSON.stringify(body),
+      },
+    ),
+  updateUser: (
+    id: string,
+    body: {
+      name?: string;
+      email?: string;
+      password?: string;
+      role?: 'user' | 'admin';
+    },
+  ) =>
+    apiRequest<import('../types').UserSettings & { id: string; role: string }>(
+      `/api/v1/admin/users/${id}`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify(body),
+      },
+    ),
+  setRole: (id: string, role: 'user' | 'admin') =>
+    apiRequest<import('../types').UserSettings & { id: string; role: string }>(
+      `/api/v1/admin/users/${id}/role`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify({ role }),
+      },
+    ),
+  deleteUser: (id: string) =>
+    apiRequest<void>(`/api/v1/admin/users/${id}`, { method: 'DELETE' }),
 };
 
 export const recordingsApi = {
@@ -155,19 +221,6 @@ export const dictionaryApi = {
       method: 'POST',
       body: JSON.stringify(body),
     }),
-  importDuolingo: (body: {
-    jwtToken: string;
-    learningLanguage?: string;
-    nativeLanguage?: string;
-    limit?: number;
-  }) =>
-    apiRequest<{ totalReceived: number; imported: number; skipped: number }>(
-      '/api/v1/dictionary/import/duolingo',
-      {
-        method: 'POST',
-        body: JSON.stringify(body),
-      },
-    ),
   remove: (id: string) =>
     apiRequest<void>(`/api/v1/dictionary/${id}`, { method: 'DELETE' }),
 };

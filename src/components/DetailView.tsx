@@ -24,6 +24,12 @@ import {
 } from 'lucide-react';
 import { Recording, DictionaryItem } from '../types';
 import { recordingsApi } from '../lib/api';
+import {
+  ExtractedKeyword,
+  buildKeywordsFromTranscript,
+} from '../lib/extractVocab';
+import { lookupFreeDictionary } from '../lib/freeDictionary';
+import { translateEnToVi } from '../lib/translate';
 
 interface DetailViewProps {
   recording: Recording;
@@ -56,6 +62,10 @@ export default function DetailView({ recording, onBack, onAddWordToDictionary, o
     example: string;
   } | null>(null);
   const [hydratedRecording, setHydratedRecording] = useState<Recording | null>(null);
+  const [keywordsList, setKeywordsList] = useState<ExtractedKeyword[]>([]);
+  const [vocabLoading, setVocabLoading] = useState(false);
+  const [vocabError, setVocabError] = useState('');
+  const [lookingUpWord, setLookingUpWord] = useState(false);
 
   // Parse time string "MM:SS" into seconds
   const parseTimeToSeconds = (timeStr: string): number => {
@@ -157,6 +167,46 @@ export default function DetailView({ recording, onBack, onAddWordToDictionary, o
   const aiSummaryText =
     hydratedRecording?.aiSummary?.trim() || recording.aiSummary || '';
 
+  useEffect(() => {
+    let cancelled = false;
+    setKeywordsList([]);
+    setVocabError('');
+
+    if (!transcriptLines.length) {
+      setVocabLoading(false);
+      return;
+    }
+
+    setVocabLoading(true);
+    buildKeywordsFromTranscript(transcriptLines, recording.category, {
+      maxWords: 8,
+    })
+      .then((words) => {
+        if (cancelled) return;
+        setKeywordsList(words);
+        if (!words.length) {
+          setVocabError(
+            'Chưa trích được từ tiếng Anh từ transcript (cần bản ghi có nội dung EN).',
+          );
+        }
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setVocabError(
+          err instanceof Error ? err.message : 'Không tra được từ vựng.',
+        );
+      })
+      .finally(() => {
+        if (!cancelled) setVocabLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+    // Depend on recording id + transcript content signature
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recording.id, hydratedRecording?.id, transcriptLines.map((l) => l.text).join('|')]);
+
   const togglePlay = () => {
     const audio = audioRef.current;
     if (!audio) return;
@@ -194,48 +244,15 @@ export default function DetailView({ recording, onBack, onAddWordToDictionary, o
     }
   };
 
-  // Vocabulary keywords specifically designed for each mockup for interactive English learning
-  const keywordsList: { word: string; phonetic: string; definition: string; example: string; category: string }[] = [
-    {
-      word: 'Deliverable',
-      phonetic: '/dɪˈlɪv.ər.ə.bəl/',
-      definition: 'Sản phẩm bàn giao (báo cáo, thiết kế, code...) cho đối tác/khách hàng.',
-      example: 'We must align on design deliverables before Friday.',
-      category: 'Học Tiếng Anh'
-    },
-    {
-      word: 'Align with',
-      phonetic: '/əˈlaɪn wɪð/',
-      definition: 'Thống nhất, đồng bộ hoặc phù hợp hoàn toàn với định hướng/thương hiệu.',
-      example: 'Does this color palette align with our brand identity?',
-      category: 'Học Tiếng Anh'
-    },
-    {
-      word: 'Pain point',
-      phonetic: '/peɪn pɔɪnt/',
-      definition: 'Điểm đau, vấn đề khó khăn lớn nhất mà người dùng đang gặp phải.',
-      example: 'The primary user pain point is the slow loading speed of dynamic charts.',
-      category: 'Phỏng vấn'
-    },
-    {
-      word: 'Readability',
-      phonetic: '/ˌriː.dəˈbɪl.ə.ti/',
-      definition: 'Khả năng đọc hiểu, độ dễ đọc (nhất là trên điện thoại di động).',
-      example: 'To improve readability on mobile devices, use a larger font size.',
-      category: 'Học Tiếng Anh'
-    }
-  ];
-
-  const handleSaveWord = (wordObj: typeof keywordsList[0]) => {
+  const handleSaveWord = (wordObj: ExtractedKeyword) => {
     onAddWordToDictionary({
       word: wordObj.word,
-      phonetic: wordObj.phonetic,
+      phonetic: wordObj.phonetic || undefined,
       definition: wordObj.definition,
       example: wordObj.example,
-      category: wordObj.category
+      category: wordObj.category,
     });
 
-    // Show temporary banner instead of blocking iframe alert
     const banner = document.createElement('div');
     banner.className = 'fixed top-4 left-1/2 -translate-x-1/2 bg-slate-900 text-white text-xs font-bold px-4 py-2.5 rounded-full shadow-lg z-50';
     banner.innerText = `✓ Đã thêm từ "${wordObj.word}" vào Từ điển của bạn!`;
@@ -243,29 +260,75 @@ export default function DetailView({ recording, onBack, onAddWordToDictionary, o
     setTimeout(() => banner.remove(), 2500);
   };
 
-  // Custom text highlight parser for interactive dictionary lookup
+  const handleWordClick = async (rawWord: string) => {
+    const clean = rawWord.replace(/[.,/#!$%^&*;:{}=\-_`~()']/g, '').trim();
+    if (!clean) return;
+
+    const existing = keywordsList.find(
+      (kw) => kw.word.toLowerCase() === clean.toLowerCase(),
+    );
+    if (existing) {
+      setSelectedWordInfo(existing);
+      return;
+    }
+
+    setLookingUpWord(true);
+    try {
+      const entry = await lookupFreeDictionary(clean, 'en');
+      const meaning = entry.meanings[0];
+      const definitionEn = meaning?.definition || 'Không có định nghĩa.';
+      const definitionVi = await translateEnToVi(definitionEn);
+      setSelectedWordInfo({
+        word: entry.word,
+        phonetic: entry.phonetic
+          ? `/${entry.phonetic.replace(/^\/|\/$/g, '')}/`
+          : '',
+        definition: definitionVi,
+        example:
+          meaning?.example ||
+          transcriptLines.find((l) =>
+            l.text.toLowerCase().includes(entry.word.toLowerCase()),
+          )?.text ||
+          '',
+      });
+    } catch {
+      setSelectedWordInfo({
+        word: clean,
+        phonetic: '',
+        definition: 'Không tìm thấy trên Free Dictionary.',
+        example: '',
+      });
+    } finally {
+      setLookingUpWord(false);
+    }
+  };
+
   const renderTextWithHighlights = (text: string, isCurrentActive: boolean) => {
     const words = text.split(' ');
+    const keywordSet = new Set(keywordsList.map((k) => k.word.toLowerCase()));
     return (
       <span>
         {words.map((word, index) => {
-          const cleanWord = word.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, "");
-          const keywordMatch = keywordsList.find(kw => kw.word.toLowerCase() === cleanWord.toLowerCase() || cleanWord.toLowerCase().startsWith(kw.word.toLowerCase().split(' ')[0]));
-          
-          if (keywordMatch) {
+          const cleanWord = word.replace(/[.,/#!$%^&*;:{}=\-_`~()']/g, '');
+          const isKeyword = keywordSet.has(cleanWord.toLowerCase());
+          const isEnglish = /^[A-Za-z][A-Za-z'-]{2,}$/.test(cleanWord);
+
+          if (isKeyword || isEnglish) {
             return (
-              <span 
-                key={index} 
+              <span
+                key={index}
                 onClick={(e) => {
                   e.stopPropagation();
-                  setSelectedWordInfo(keywordMatch);
+                  void handleWordClick(cleanWord);
                 }}
-                className={`cursor-help px-1 rounded font-bold underline decoration-indigo-400 decoration-2 underline-offset-4 transition-all ${
-                  isCurrentActive 
-                    ? 'bg-blue-100 dark:bg-blue-900/50 text-indigo-950 dark:text-white' 
-                    : 'text-blue-600 dark:text-blue-400 hover:bg-slate-100 dark:hover:bg-slate-800'
+                className={`cursor-help px-1 rounded font-bold underline decoration-2 underline-offset-4 transition-all ${
+                  isCurrentActive
+                    ? 'bg-blue-100 dark:bg-blue-900/50 text-indigo-950 dark:text-white decoration-indigo-400'
+                    : isKeyword
+                      ? 'text-blue-600 dark:text-blue-400 decoration-indigo-400 hover:bg-slate-100 dark:hover:bg-slate-800'
+                      : 'text-inherit decoration-slate-300 dark:decoration-slate-600 hover:bg-slate-100 dark:hover:bg-slate-800'
                 } mr-1 inline-block`}
-                title="Nhấp để xem nghĩa & lưu từ vựng"
+                title="Nhấp để xem nghĩa"
               >
                 {word}
               </span>
@@ -279,6 +342,11 @@ export default function DetailView({ recording, onBack, onAddWordToDictionary, o
 
   return (
     <div className="flex-1 flex flex-col h-screen overflow-hidden bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 transition-colors pb-32 md:pb-28">
+      {lookingUpWord && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[60] bg-indigo-900 text-white text-xs font-bold px-4 py-2.5 rounded-full shadow-lg">
+          Đang tra Free Dictionary...
+        </div>
+      )}
       
       {/* Top Header Bar: Responsive and Compact */}
       <header className="h-16 px-4 md:px-6 flex items-center justify-between border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shrink-0 shadow-xs transition-colors z-10">
@@ -520,11 +588,23 @@ export default function DetailView({ recording, onBack, onAddWordToDictionary, o
             <BookOpen className="w-4.5 h-4.5 text-blue-600 dark:text-blue-400" />
             <h3 className="text-xs font-extrabold uppercase tracking-widest text-slate-800 dark:text-slate-200">Từ vựng rút gọn</h3>
           </div>
+          <p className="text-[10px] text-slate-500 dark:text-slate-400 -mt-3">
+            Trích từ transcript EN · nghĩa live Free Dictionary (không lưu DB)
+          </p>
 
           <div className="space-y-4">
+            {vocabLoading && (
+              <p className="text-xs text-slate-500 font-medium">Đang trích từ & tra nghĩa...</p>
+            )}
+            {!vocabLoading && vocabError && (
+              <p className="text-xs text-amber-600 dark:text-amber-400 font-medium">{vocabError}</p>
+            )}
+            {!vocabLoading && !vocabError && keywordsList.length === 0 && (
+              <p className="text-xs text-slate-500">Chưa có từ vựng để hiển thị.</p>
+            )}
             {keywordsList.map((kw, idx) => (
               <div 
-                key={idx} 
+                key={`${kw.word}-${idx}`} 
                 className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-3.5 rounded-xl space-y-2 relative overflow-hidden shadow-xs"
               >
                 <div className="flex justify-between items-start">

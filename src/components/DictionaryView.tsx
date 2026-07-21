@@ -16,24 +16,21 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { DictionaryItem } from '../types';
+import {
+  FreeDictEntry,
+  lookupFreeDictionary,
+} from '../lib/freeDictionary';
 
 interface DictionaryViewProps {
   dictionaryItems: DictionaryItem[];
   onAddWord: (item: Omit<DictionaryItem, 'id'>) => void;
   onDeleteWord: (id: string) => void;
-  onImportDuolingo: (payload: {
-    jwtToken: string;
-    learningLanguage?: string;
-    nativeLanguage?: string;
-    limit?: number;
-  }) => Promise<{ totalReceived: number; imported: number; skipped: number }>;
 }
 
 export default function DictionaryView({ 
   dictionaryItems, 
   onAddWord, 
   onDeleteWord,
-  onImportDuolingo,
 }: DictionaryViewProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [activeFilter, setActiveFilter] = useState<'Tất cả' | 'Học Tiếng Anh' | 'Phỏng vấn' | 'Họp Khách hàng'>('Tất cả');
@@ -45,9 +42,10 @@ export default function DictionaryView({
   const [newDefinition, setNewDefinition] = useState('');
   const [newExample, setNewExample] = useState('');
   const [newCategory, setNewCategory] = useState<'Học Tiếng Anh' | 'Phỏng vấn' | 'Họp Khách hàng'>('Học Tiếng Anh');
-  const [duolingoToken, setDuolingoToken] = useState('');
-  const [duolingoLimit, setDuolingoLimit] = useState(100);
-  const [importingDuolingo, setImportingDuolingo] = useState(false);
+  const [lookupQuery, setLookupQuery] = useState('');
+  const [lookupLoading, setLookupLoading] = useState(false);
+  const [lookupError, setLookupError] = useState<string | null>(null);
+  const [lookupEntry, setLookupEntry] = useState<FreeDictEntry | null>(null);
 
   const filteredItems = dictionaryItems.filter(item => {
     const matchesSearch = item.word.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -104,38 +102,33 @@ export default function DictionaryView({
     setTimeout(() => banner.remove(), 2000);
   };
 
-  const handleImportDuolingo = async () => {
-    if (!duolingoToken.trim()) {
-      const toast = document.createElement('div');
-      toast.className = 'fixed top-4 left-1/2 -translate-x-1/2 bg-rose-600 text-white text-xs font-bold px-4 py-2.5 rounded-full shadow-lg z-50';
-      toast.innerText = 'Cần nhập Duolingo JWT token.';
-      document.body.appendChild(toast);
-      setTimeout(() => toast.remove(), 2200);
+  const handleLookup = async (e?: React.FormEvent) => {
+    e?.preventDefault();
+    const q = lookupQuery.trim();
+    if (!q) return;
+
+    setLookupLoading(true);
+    setLookupError(null);
+    setLookupEntry(null);
+    try {
+      const entry = await lookupFreeDictionary(q, 'en');
+      setLookupEntry(entry);
+    } catch (err) {
+      setLookupError(err instanceof Error ? err.message : 'Tra từ thất bại');
+    } finally {
+      setLookupLoading(false);
+    }
+  };
+
+  const handlePlayAudio = (url?: string, fallbackWord?: string) => {
+    if (url) {
+      const audio = new Audio(url);
+      void audio.play().catch(() => {
+        if (fallbackWord) handleSpeak(fallbackWord);
+      });
       return;
     }
-
-    setImportingDuolingo(true);
-    try {
-      const result = await onImportDuolingo({
-        jwtToken: duolingoToken.trim(),
-        learningLanguage: 'en',
-        nativeLanguage: 'vi',
-        limit: duolingoLimit,
-      });
-      const toast = document.createElement('div');
-      toast.className = 'fixed top-4 left-1/2 -translate-x-1/2 bg-emerald-600 text-white text-xs font-bold px-4 py-2.5 rounded-full shadow-lg z-50';
-      toast.innerText = `Import Duolingo: +${result.imported} từ, bỏ qua ${result.skipped}.`;
-      document.body.appendChild(toast);
-      setTimeout(() => toast.remove(), 2600);
-    } catch (err) {
-      const toast = document.createElement('div');
-      toast.className = 'fixed top-4 left-1/2 -translate-x-1/2 bg-rose-600 text-white text-xs font-bold px-4 py-2.5 rounded-full shadow-lg z-50';
-      toast.innerText = err instanceof Error ? err.message : 'Import Duolingo thất bại';
-      document.body.appendChild(toast);
-      setTimeout(() => toast.remove(), 2600);
-    } finally {
-      setImportingDuolingo(false);
-    }
+    if (fallbackWord) handleSpeak(fallbackWord);
   };
 
   return (
@@ -194,39 +187,108 @@ export default function DictionaryView({
         <div className="mb-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 md:p-5">
           <div className="flex items-center justify-between gap-3 mb-3">
             <h4 className="text-sm font-extrabold text-slate-900 dark:text-white">
-              Import từ vựng từ Duolingo
+              Tra từ Free Dictionary
             </h4>
             <span className="text-[10px] text-slate-500 font-bold uppercase">
-              unofficial
+              live · không lưu
             </span>
           </div>
-          <p className="text-xs text-slate-500 dark:text-slate-400 mb-3">
-            Dán JWT token lấy từ cookie phiên đăng nhập Duolingo để pull word list về tài khoản của bạn.
+          <p className="text-xs text-slate-500 dark:text-slate-400 mb-3 leading-relaxed">
+            Gọi trực tiếp{' '}
+            <a
+              href="https://dictionaryapi.dev/"
+              target="_blank"
+              rel="noreferrer"
+              className="text-indigo-600 dark:text-indigo-400 font-semibold underline-offset-2 hover:underline"
+            >
+              Free Dictionary API
+            </a>
+            {' '}— nghĩa, phiên âm, ví dụ hiện ngay, không ghi vào database.
           </p>
-          <div className="grid grid-cols-1 md:grid-cols-[1fr_110px_140px] gap-2.5">
+          <form
+            onSubmit={(e) => void handleLookup(e)}
+            className="grid grid-cols-1 md:grid-cols-[1fr_120px] gap-2.5"
+          >
             <input
-              type="password"
-              value={duolingoToken}
-              onChange={(e) => setDuolingoToken(e.target.value)}
-              placeholder="Duolingo JWT token"
+              value={lookupQuery}
+              onChange={(e) => setLookupQuery(e.target.value)}
+              placeholder="Nhập từ tiếng Anh, ví dụ: interview"
               className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-xs md:text-sm outline-none"
             />
-            <input
-              type="number"
-              min={1}
-              max={500}
-              value={duolingoLimit}
-              onChange={(e) => setDuolingoLimit(Number(e.target.value) || 100)}
-              className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl text-sm outline-none"
-            />
             <button
-              onClick={() => void handleImportDuolingo()}
-              disabled={importingDuolingo}
+              type="submit"
+              disabled={lookupLoading || !lookupQuery.trim()}
               className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl px-3 py-2.5 disabled:opacity-60"
             >
-              {importingDuolingo ? 'Đang import...' : 'Import Duolingo'}
+              {lookupLoading ? 'Đang tra...' : 'Tra từ'}
             </button>
-          </div>
+          </form>
+
+          {lookupError && (
+            <p className="mt-3 text-xs text-rose-600 dark:text-rose-400 font-medium">
+              {lookupError}
+            </p>
+          )}
+
+          {lookupEntry && (
+            <div className="mt-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 p-4 space-y-3">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h5 className="text-lg font-extrabold text-slate-900 dark:text-white">
+                      {lookupEntry.word}
+                    </h5>
+                    {lookupEntry.phonetic && (
+                      <span className="text-sm text-slate-500 font-mono">
+                        {lookupEntry.phonetic}
+                      </span>
+                    )}
+                  </div>
+                  <a
+                    href={lookupEntry.sourceUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1 mt-1 text-[11px] text-indigo-600 dark:text-indigo-400 font-semibold"
+                  >
+                    Xem trên API <ExternalLink className="w-3 h-3" />
+                  </a>
+                </div>
+                <button
+                  type="button"
+                  onClick={() =>
+                    handlePlayAudio(lookupEntry.audioUrl, lookupEntry.word)
+                  }
+                  className="shrink-0 p-2 rounded-full bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-200 dark:hover:bg-indigo-900"
+                  title="Phát âm"
+                >
+                  <Volume2 className="w-4 h-4" />
+                </button>
+              </div>
+
+              <ul className="space-y-3">
+                {lookupEntry.meanings.map((m, idx) => (
+                  <li key={`${m.partOfSpeech}-${idx}`} className="text-xs md:text-sm">
+                    <span className="inline-block text-[10px] font-extrabold uppercase tracking-wider text-indigo-600 dark:text-indigo-400 mb-0.5">
+                      {m.partOfSpeech}
+                    </span>
+                    <p className="text-slate-800 dark:text-slate-200 leading-relaxed">
+                      {m.definition}
+                    </p>
+                    {m.example && (
+                      <p className="mt-1 text-slate-500 italic">
+                        “{m.example}”
+                      </p>
+                    )}
+                    {m.synonyms.length > 0 && (
+                      <p className="mt-1 text-[11px] text-slate-500">
+                        Synonyms: {m.synonyms.join(', ')}
+                      </p>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
 
         {/* Filters and Search Bar: Adaptive layout */}

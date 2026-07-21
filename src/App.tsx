@@ -7,6 +7,8 @@ import LiveRecordView from './components/LiveRecordView';
 import SettingsView from './components/SettingsView';
 import DictionaryView from './components/DictionaryView';
 import AuthView from './components/AuthView';
+import AiUsageView from './components/AiUsageView';
+import AdminUsersView from './components/AdminUsersView';
 import { Recording, UserSettings, DictionaryItem } from './types';
 import {
   dictionaryApi,
@@ -32,6 +34,7 @@ const emptySettings: UserSettings = {
   sampleRate: 48,
   aiNoiseCancellation: true,
   theme: 'light',
+  role: 'user',
 };
 
 export default function App() {
@@ -52,6 +55,22 @@ export default function App() {
   const [loadError, setLoadError] = useState('');
   const [pendingDeleteRecording, setPendingDeleteRecording] = useState<Recording | null>(null);
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [storageUsedBytes, setStorageUsedBytes] = useState(0);
+  const [storageQuotaBytes, setStorageQuotaBytes] = useState(1024 * 1024 * 1024);
+  const [storageLoading, setStorageLoading] = useState(false);
+
+  const refreshStorage = useCallback(async () => {
+    setStorageLoading(true);
+    try {
+      const usage = await usersApi.storage();
+      setStorageUsedBytes(usage.usedBytes || 0);
+      setStorageQuotaBytes(usage.quotaBytes || 1024 * 1024 * 1024);
+    } catch {
+      // keep last known values
+    } finally {
+      setStorageLoading(false);
+    }
+  }, []);
 
   const refreshData = useCallback(async () => {
     const [recs, dict, me] = await Promise.all([
@@ -78,8 +97,11 @@ export default function App() {
       sampleRate: me.sampleRate,
       aiNoiseCancellation: me.aiNoiseCancellation,
       theme: me.theme,
+      role: me.role || 'user',
+      id: me.id,
     });
-  }, []);
+    void refreshStorage();
+  }, [refreshStorage]);
 
   useEffect(() => {
     if (!token) {
@@ -125,6 +147,8 @@ export default function App() {
             sampleRate: user.sampleRate,
             aiNoiseCancellation: user.aiNoiseCancellation,
             theme: user.theme,
+            role: (user as { role?: 'user' | 'admin' }).role || 'user',
+            id: (user as { id?: string }).id,
           });
         }}
       />
@@ -172,7 +196,8 @@ export default function App() {
         setSelectedRecording(null);
         setCurrentTab('recordings');
       }
-      setToast({ type: 'success', message: 'Đã xóa bản ghi.' });
+      setToast({ type: 'success', message: 'Đã xóa bản ghi trên cloud.' });
+      void refreshStorage();
     } catch (err) {
       setToast({
         type: 'error',
@@ -206,6 +231,7 @@ export default function App() {
     } catch {
       // keep optimistic list
     }
+    void refreshStorage();
   };
 
   const handleAddWordToDictionary = async (
@@ -218,18 +244,7 @@ export default function App() {
   const handleDeleteWordFromDictionary = async (id: string) => {
     await dictionaryApi.remove(id);
     setDictionaryItems((prev) => prev.filter((item) => item.id !== id));
-  };
-
-  const handleImportDuolingo = async (payload: {
-    jwtToken: string;
-    learningLanguage?: string;
-    nativeLanguage?: string;
-    limit?: number;
-  }) => {
-    const result = await dictionaryApi.importDuolingo(payload);
-    const dict = await dictionaryApi.list();
-    setDictionaryItems(dict.items);
-    return result;
+    void refreshStorage();
   };
 
   const handleRegenerateSummary = async (recordingId: string) => {
@@ -298,8 +313,19 @@ export default function App() {
             dictionaryItems={dictionaryItems}
             onAddWord={(item) => void handleAddWordToDictionary(item)}
             onDeleteWord={(id) => void handleDeleteWordFromDictionary(id)}
-            onImportDuolingo={(payload) => handleImportDuolingo(payload)}
           />
+        );
+      case 'ai_usage':
+        return <AiUsageView isAdmin={settings.role === 'admin'} />;
+      case 'admin':
+        return settings.role === 'admin' ? (
+          <AdminUsersView currentUserId={settings.id} />
+        ) : (
+          <div className="flex-1 flex items-center justify-center p-8">
+            <p className="text-sm text-rose-600 font-semibold">
+              Chỉ admin mới truy cập được màn RBAC.
+            </p>
+          </div>
         );
       case 'dashboard':
         return (
@@ -397,7 +423,14 @@ export default function App() {
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-slate-50 dark:bg-slate-950 font-sans">
-      <Sidebar currentTab={currentTab} setCurrentTab={setCurrentTab} />
+      <Sidebar
+        currentTab={currentTab}
+        setCurrentTab={setCurrentTab}
+        storageUsedBytes={storageUsedBytes}
+        storageQuotaBytes={storageQuotaBytes}
+        storageLoading={storageLoading}
+        isAdmin={settings.role === 'admin'}
+      />
       <main className="flex-1 flex flex-col h-screen overflow-hidden relative">
         {renderContent()}
         {playingRecording && (

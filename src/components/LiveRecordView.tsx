@@ -28,6 +28,7 @@ interface LiveRecordViewProps {
 
 type TalkMode = 'solo' | 'conversation';
 type ActiveSpeaker = 'me' | 'other';
+type RecordLang = 'en' | 'vi';
 
 type LiveLine = TranscriptLine & { seq?: number };
 
@@ -68,20 +69,28 @@ export default function LiveRecordView({
   onSaveRecording,
   onCancel,
 }: LiveRecordViewProps) {
+  const [isRecording, setIsRecording] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [timer, setTimer] = useState(0);
-  const [title, setTitle] = useState('');
+  const [title, setTitle] = useState(
+    () => `Học Tiếng Anh - ${new Date().toLocaleDateString('vi-VN')}`,
+  );
   const [category, setCategory] = useState<
     'Học Tiếng Anh' | 'Phỏng vấn' | 'Cuộc họp'
   >('Học Tiếng Anh');
+  const [titleManual, setTitleManual] = useState(false);
+  const [recordLang, setRecordLang] = useState<RecordLang>('en');
   const [talkMode, setTalkMode] = useState<TalkMode>('solo');
   const [activeSpeaker, setActiveSpeaker] = useState<ActiveSpeaker>('me');
   const [lines, setLines] = useState<LiveLine[]>([]);
   const [partialText, setPartialText] = useState('');
   const [recordingId, setRecordingId] = useState<string | null>(null);
   const [micActive, setMicActive] = useState(false);
-  const [statusMsg, setStatusMsg] = useState('Đang khởi tạo...');
+  const [statusMsg, setStatusMsg] = useState(
+    'Chọn ngôn ngữ, rồi bấm Bắt đầu để ghi âm',
+  );
   const [saving, setSaving] = useState(false);
+  const [starting, setStarting] = useState(false);
   const [barsState, setBarsState] = useState<number[]>(
     Array.from({ length: 40 }, () => 20),
   );
@@ -94,12 +103,12 @@ export default function LiveRecordView({
   const animationRef = useRef<number | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
-  const startedRef = useRef(false);
-  const wantListeningRef = useRef(true);
+  const wantListeningRef = useRef(false);
   const pausedRef = useRef(false);
   const linesRef = useRef<LiveLine[]>([]);
   const talkModeRef = useRef<TalkMode>('solo');
   const activeSpeakerRef = useRef<ActiveSpeaker>('me');
+  const recordLangRef = useRef<RecordLang>('en');
   const timerRef = useRef(0);
   const localSeqRef = useRef(0);
 
@@ -150,6 +159,7 @@ export default function LiveRecordView({
     socketRef.current?.disconnect();
     socketRef.current = null;
     setMicActive(false);
+    setIsRecording(false);
   }, []);
 
   useEffect(() => {
@@ -169,240 +179,274 @@ export default function LiveRecordView({
   }, [activeSpeaker]);
 
   useEffect(() => {
+    recordLangRef.current = recordLang;
+  }, [recordLang]);
+
+  useEffect(() => {
     timerRef.current = timer;
   }, [timer]);
 
   useEffect(() => {
-    const defaultTitle = `${category} - ${new Date().toLocaleDateString('vi-VN')}`;
-    setTitle((prev) => (prev ? prev : defaultTitle));
-  }, [category]);
+    if (titleManual) return;
+    setTitle(`${category} - ${new Date().toLocaleDateString('vi-VN')}`);
+  }, [category, titleManual]);
 
+  const selectCategory = (
+    cat: 'Học Tiếng Anh' | 'Phỏng vấn' | 'Cuộc họp',
+  ) => {
+    setCategory(cat);
+    if (!titleManual) {
+      setTitle(`${cat} - ${new Date().toLocaleDateString('vi-VN')}`);
+    }
+  };
   useEffect(() => {
-    let interval: ReturnType<typeof setInterval>;
-    if (!isPaused && !saving) {
+    let interval: ReturnType<typeof setInterval> | undefined;
+    if (isRecording && !isPaused && !saving) {
       interval = setInterval(() => setTimer((t) => t + 1), 1000);
     }
-    return () => clearInterval(interval);
-  }, [isPaused, saving]);
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [isRecording, isPaused, saving]);
 
   useEffect(() => {
-    if (startedRef.current) return;
-    startedRef.current = true;
-
-    const boot = async () => {
-      try {
-        const SpeechCtor = getSpeechRecognitionCtor();
-        if (!SpeechCtor) {
-          setStatusMsg(
-            'Trình duyệt không hỗ trợ nhận diện realtime. Dùng Chrome/Edge.',
-          );
-          return;
-        }
-
-        const created = await recordingsApi.create({
-          title: title || `${category} - live`,
-          category,
-        });
-        setRecordingId(created.id);
-
-        const socket = createLiveSocket(token);
-        socketRef.current = socket;
-
-        await new Promise<void>((resolve, reject) => {
-          const timerId = setTimeout(
-            () => reject(new Error('Không kết nối được live server')),
-            8000,
-          );
-          socket.on('session.ready', () => {
-            clearTimeout(timerId);
-            socket.emit(
-              'session.start',
-              { recordingId: created.id, category, mode: 'browser' },
-              (ack: { ok?: boolean; message?: string }) => {
-                if (!ack?.ok) {
-                  reject(new Error(ack?.message || 'Không start được session'));
-                } else resolve();
-              },
-            );
-          });
-          socket.on('connect_error', (err) => {
-            clearTimeout(timerId);
-            reject(err);
-          });
-        });
-
-        socket.on('transcript.translation', (ev: TranscriptEvent) => {
-          if (!ev.translation) return;
-          setLines((prev) => {
-            const next = prev.map((l) => {
-              if (l.seq !== undefined && l.seq === ev.seq) {
-                return { ...l, translation: ev.translation, seq: ev.seq };
-              }
-              if (!l.translation && l.text === ev.text) {
-                return { ...l, translation: ev.translation, seq: ev.seq };
-              }
-              return l;
-            });
-            linesRef.current = next;
-            return next;
-          });
-        });
-
-        const applyLocalTranslation = async (seq: number, text: string) => {
-          const vi = await translateEnToVi(text);
-          if (!vi) return;
-          setLines((prev) => {
-            const next = prev.map((l) => {
-              if (l.seq === seq && !l.translation) {
-                return { ...l, translation: vi };
-              }
-              return l;
-            });
-            linesRef.current = next;
-            return next;
-          });
-        };
-
-        const stream = await navigator.mediaDevices.getUserMedia({
-          audio: {
-            echoCancellation: settings.aiNoiseCancellation,
-            noiseSuppression: settings.aiNoiseCancellation,
-          },
-        });
-        streamRef.current = stream;
-        setMicActive(true);
-
-        const AudioContextClass =
-          window.AudioContext ||
-          (window as unknown as { webkitAudioContext: typeof AudioContext })
-            .webkitAudioContext;
-        const audioCtx = new AudioContextClass();
-        const analyser = audioCtx.createAnalyser();
-        audioCtx.createMediaStreamSource(stream).connect(analyser);
-        analyser.fftSize = 64;
-        audioContextRef.current = audioCtx;
-        const dataArray = new Uint8Array(analyser.frequencyBinCount);
-        const tick = () => {
-          analyser.getByteFrequencyData(dataArray);
-          setBarsState(
-            Array.from({ length: 40 }, (_, i) => {
-              const val =
-                dataArray[Math.floor((i / 40) * dataArray.length)] || 0;
-              return Math.max(12, (val / 255) * 85);
-            }),
-          );
-          animationRef.current = requestAnimationFrame(tick);
-        };
-        tick();
-
-        const mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-          ? 'audio/webm;codecs=opus'
-          : 'audio/webm';
-        const recorder = new MediaRecorder(stream, { mimeType: mime });
-        mediaRecorderRef.current = recorder;
-        chunksRef.current = [];
-        recorder.ondataavailable = (e) => {
-          if (e.data.size) chunksRef.current.push(e.data);
-        };
-        recorder.start(1000);
-
-        const recognition = new SpeechCtor();
-        recognition.continuous = true;
-        recognition.interimResults = true;
-        recognition.maxAlternatives = 1;
-        recognition.lang = 'en-US';
-        recognitionRef.current = recognition;
-
-        recognition.onresult = (event) => {
-          if (pausedRef.current) return;
-          let interim = '';
-          let finalChunk = '';
-
-          for (let i = event.resultIndex; i < event.results.length; i++) {
-            const result = event.results[i];
-            const text = result[0].transcript.trim();
-            if (!text) continue;
-            if (result.isFinal) finalChunk += (finalChunk ? ' ' : '') + text;
-            else interim += text;
-          }
-
-          const speaker = currentSpeakerLabel();
-
-          if (interim) {
-            setPartialText(`${speaker}: ${interim}`);
-            scrollToBottom();
-          }
-
-          if (finalChunk) {
-            setPartialText('');
-            const seq = localSeqRef.current++;
-            const timeLabel = formatTimer(timerRef.current).substring(3);
-            setLines((prev) => {
-              const next = [
-                ...prev,
-                {
-                  time: timeLabel,
-                  speaker,
-                  text: finalChunk,
-                  seq,
-                },
-              ];
-              linesRef.current = next;
-              return next;
-            });
-            scrollToBottom();
-            socket.emit('transcript.utterance', {
-              text: finalChunk,
-              isFinal: true,
-              speaker,
-              seq,
-            });
-            // Client-side EN→VI so bilingual shows even if Gemini quota is exhausted
-            void applyLocalTranslation(seq, finalChunk);
-            setStatusMsg('Đang nghe realtime · dịch Việt...');
-          }
-        };
-
-        recognition.onerror = (event) => {
-          if (event.error === 'no-speech' || event.error === 'aborted') return;
-          if (event.error === 'not-allowed') {
-            setStatusMsg('Chưa cấp quyền microphone');
-            wantListeningRef.current = false;
-            return;
-          }
-          setStatusMsg(`Lỗi nhận diện: ${event.error}`);
-        };
-
-        recognition.onend = () => {
-          if (wantListeningRef.current && !pausedRef.current) {
-            try {
-              recognition.start();
-            } catch {
-              // already started
-            }
-          }
-        };
-
-        wantListeningRef.current = true;
-        recognition.start();
-        setStatusMsg('Realtime ON — nói đi, chữ hiện ngay');
-      } catch (err) {
-        setStatusMsg(
-          err instanceof Error
-            ? err.message
-            : 'Không thể truy cập microphone hoặc API',
-        );
-      }
-    };
-
-    void boot();
     return () => {
       void cleanup();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [cleanup]);
+
+  const startRecording = async () => {
+    if (isRecording || starting || saving) return;
+    setStarting(true);
+    setStatusMsg('Đang khởi tạo phiên ghi âm...');
+
+    try {
+      const SpeechCtor = getSpeechRecognitionCtor();
+      if (!SpeechCtor) {
+        setStatusMsg(
+          'Trình duyệt không hỗ trợ nhận diện realtime. Dùng Chrome/Edge.',
+        );
+        return;
+      }
+
+      const lang = recordLangRef.current;
+      const created = await recordingsApi.create({
+        title: title || `${category} - live`,
+        category,
+      });
+      setRecordingId(created.id);
+
+      const socket = createLiveSocket(token);
+      socketRef.current = socket;
+
+      await new Promise<void>((resolve, reject) => {
+        const timerId = setTimeout(
+          () => reject(new Error('Không kết nối được live server')),
+          8000,
+        );
+        socket.on('session.ready', () => {
+          clearTimeout(timerId);
+          socket.emit(
+            'session.start',
+            {
+              recordingId: created.id,
+              category,
+              mode: 'browser',
+              language: lang,
+            },
+            (ack: { ok?: boolean; message?: string }) => {
+              if (!ack?.ok) {
+                reject(new Error(ack?.message || 'Không start được session'));
+              } else resolve();
+            },
+          );
+        });
+        socket.on('connect_error', (err) => {
+          clearTimeout(timerId);
+          reject(err);
+        });
+      });
+
+      socket.on('transcript.translation', (ev: TranscriptEvent) => {
+        if (!ev.translation) return;
+        setLines((prev) => {
+          const next = prev.map((l) => {
+            if (l.seq !== undefined && l.seq === ev.seq) {
+              return { ...l, translation: ev.translation, seq: ev.seq };
+            }
+            if (!l.translation && l.text === ev.text) {
+              return { ...l, translation: ev.translation, seq: ev.seq };
+            }
+            return l;
+          });
+          linesRef.current = next;
+          return next;
+        });
+      });
+
+      const applyLocalTranslation = async (seq: number, text: string) => {
+        if (recordLangRef.current !== 'en') return;
+        const vi = await translateEnToVi(text);
+        if (!vi) return;
+        setLines((prev) => {
+          const next = prev.map((l) => {
+            if (l.seq === seq && !l.translation) {
+              return { ...l, translation: vi };
+            }
+            return l;
+          });
+          linesRef.current = next;
+          return next;
+        });
+      };
+
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: settings.aiNoiseCancellation,
+          noiseSuppression: settings.aiNoiseCancellation,
+        },
+      });
+      streamRef.current = stream;
+      setMicActive(true);
+
+      const AudioContextClass =
+        window.AudioContext ||
+        (window as unknown as { webkitAudioContext: typeof AudioContext })
+          .webkitAudioContext;
+      const audioCtx = new AudioContextClass();
+      const analyser = audioCtx.createAnalyser();
+      audioCtx.createMediaStreamSource(stream).connect(analyser);
+      analyser.fftSize = 64;
+      audioContextRef.current = audioCtx;
+      const dataArray = new Uint8Array(analyser.frequencyBinCount);
+      const tick = () => {
+        analyser.getByteFrequencyData(dataArray);
+        setBarsState(
+          Array.from({ length: 40 }, (_, i) => {
+            const val =
+              dataArray[Math.floor((i / 40) * dataArray.length)] || 0;
+            return Math.max(12, (val / 255) * 85);
+          }),
+        );
+        animationRef.current = requestAnimationFrame(tick);
+      };
+      tick();
+
+      const mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : 'audio/webm';
+      const recorder = new MediaRecorder(stream, { mimeType: mime });
+      mediaRecorderRef.current = recorder;
+      chunksRef.current = [];
+      recorder.ondataavailable = (e) => {
+        if (e.data.size) chunksRef.current.push(e.data);
+      };
+      recorder.start(1000);
+
+      const recognition = new SpeechCtor();
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.maxAlternatives = 1;
+      recognition.lang = lang === 'vi' ? 'vi-VN' : 'en-US';
+      recognitionRef.current = recognition;
+
+      recognition.onresult = (event) => {
+        if (pausedRef.current) return;
+        let interim = '';
+        let finalChunk = '';
+
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const result = event.results[i];
+          const text = result[0].transcript.trim();
+          if (!text) continue;
+          if (result.isFinal) finalChunk += (finalChunk ? ' ' : '') + text;
+          else interim += text;
+        }
+
+        const speaker = currentSpeakerLabel();
+
+        if (interim) {
+          setPartialText(`${speaker}: ${interim}`);
+          scrollToBottom();
+        }
+
+        if (finalChunk) {
+          setPartialText('');
+          const seq = localSeqRef.current++;
+          const timeLabel = formatTimer(timerRef.current).substring(3);
+          setLines((prev) => {
+            const next = [
+              ...prev,
+              {
+                time: timeLabel,
+                speaker,
+                text: finalChunk,
+                seq,
+              },
+            ];
+            linesRef.current = next;
+            return next;
+          });
+          scrollToBottom();
+          socket.emit('transcript.utterance', {
+            text: finalChunk,
+            isFinal: true,
+            speaker,
+            seq,
+          });
+          if (recordLangRef.current === 'en') {
+            void applyLocalTranslation(seq, finalChunk);
+            setStatusMsg('Đang nghe · dịch Việt...');
+          } else {
+            setStatusMsg('Đang nghe tiếng Việt...');
+          }
+        }
+      };
+
+      recognition.onerror = (event) => {
+        if (event.error === 'no-speech' || event.error === 'aborted') return;
+        if (event.error === 'not-allowed') {
+          setStatusMsg('Chưa cấp quyền microphone');
+          wantListeningRef.current = false;
+          return;
+        }
+        setStatusMsg(`Lỗi nhận diện: ${event.error}`);
+      };
+
+      recognition.onend = () => {
+        if (wantListeningRef.current && !pausedRef.current) {
+          try {
+            recognition.start();
+          } catch {
+            // already started
+          }
+        }
+      };
+
+      wantListeningRef.current = true;
+      pausedRef.current = false;
+      setIsPaused(false);
+      recognition.start();
+      setIsRecording(true);
+      setStatusMsg(
+        lang === 'vi'
+          ? 'Đang ghi tiếng Việt — nói đi, chữ hiện ngay'
+          : 'Đang ghi tiếng Anh — chữ Anh + dịch Việt',
+      );
+    } catch (err) {
+      setStatusMsg(
+        err instanceof Error
+          ? err.message
+          : 'Không thể truy cập microphone hoặc API',
+      );
+      await cleanup();
+    } finally {
+      setStarting(false);
+    }
+  };
 
   const togglePause = () => {
+    if (!isRecording) return;
     const next = !isPaused;
     setIsPaused(next);
     pausedRef.current = next;
@@ -428,9 +472,9 @@ export default function LiveRecordView({
   };
 
   const handleSave = async () => {
-    if (!recordingId || saving) return;
+    if (!recordingId || saving || !isRecording) return;
     setSaving(true);
-    setStatusMsg('Đang lưu bản ghi...');
+    setStatusMsg('Đang lưu bản ghi lên Firebase...');
     wantListeningRef.current = false;
     try {
       try {
@@ -461,7 +505,7 @@ export default function LiveRecordView({
       setStatusMsg('Đang upload audio lên Firebase Storage...');
       await recordingsApi.uploadAudio(recordingId, blob);
 
-      setStatusMsg('Đang lưu transcript...');
+      setStatusMsg('Đang lưu transcript lên Firestore...');
       const saved = await recordingsApi.finalize(recordingId, {
         title:
           title || `${category} - ${new Date().toLocaleDateString('vi-VN')}`,
@@ -506,13 +550,17 @@ export default function LiveRecordView({
 
   const copyAll = () => {
     const text = lines
-      .map(
-        (l) =>
-          `${l.speaker}: ${l.text}${l.translation ? `\n   -> ${l.translation}` : ''}`,
-      )
+      .map((l) => {
+        if (recordLang === 'vi' || !l.translation) {
+          return `${l.speaker}: ${l.text}`;
+        }
+        return `${l.speaker}: ${l.text}\n   -> ${l.translation}`;
+      })
       .join('\n\n');
     void navigator.clipboard.writeText(text);
   };
+
+  const langLocked = isRecording || starting;
 
   return (
     <div className="flex-1 flex flex-col h-screen overflow-hidden bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100">
@@ -524,31 +572,97 @@ export default function LiveRecordView({
           >
             <ArrowLeft className="w-5 h-5" />
           </button>
-          <div className="flex flex-col">
+          <div className="flex flex-col min-w-0">
             <span className="text-xs font-extrabold text-blue-600 uppercase tracking-widest">
-              Ghi âm → chữ tức thì
+              {isRecording ? 'Đang ghi âm' : 'Ghi âm mới'}
             </span>
-            <input
-              type="text"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              className="text-sm md:text-base font-bold bg-transparent border-none p-0 outline-none max-w-[220px]"
-            />
+            <div className="flex items-center gap-2 min-w-0">
+              <input
+                type="text"
+                value={title}
+                onChange={(e) => {
+                  setTitleManual(true);
+                  setTitle(e.target.value);
+                }}
+                placeholder="Nhập tiêu đề bản ghi..."
+                className="text-sm md:text-base font-bold bg-transparent border-none p-0 outline-none max-w-[240px] truncate"
+              />
+              {titleManual && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTitleManual(false);
+                    setTitle(
+                      `${category} - ${new Date().toLocaleDateString('vi-VN')}`,
+                    );
+                  }}
+                  className="shrink-0 text-[10px] font-bold text-blue-600 hover:underline"
+                >
+                  Mặc định
+                </button>
+              )}
+            </div>
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <span className="flex items-center gap-1 px-2.5 py-1 bg-rose-500/10 text-rose-600 rounded-full text-[10px] font-extrabold">
-            <span className="w-2 h-2 bg-rose-600 rounded-full animate-ping" />
-            LIVE
-          </span>
+          {isRecording && (
+            <span className="flex items-center gap-1 px-2.5 py-1 bg-rose-500/10 text-rose-600 rounded-full text-[10px] font-extrabold">
+              <span className="w-2 h-2 bg-rose-600 rounded-full animate-ping" />
+              LIVE
+            </span>
+          )}
           <span className="font-mono text-xs font-bold bg-slate-100 dark:bg-slate-800 px-2.5 py-1 rounded-lg">
             {formatTimer(timer)}
           </span>
         </div>
       </header>
 
-      <div className="flex-1 flex flex-col p-3 md:p-4 gap-3 overflow-hidden pb-24">
-        {/* Talk mode */}
+      <div className="flex-1 min-h-0 flex flex-col p-3 md:p-4 gap-3 overflow-hidden">
+        <section className="bg-white dark:bg-slate-900 px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 flex flex-col gap-2 shrink-0">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <span className="text-[10px] font-extrabold uppercase text-slate-400">
+              Ngôn ngữ ghi âm
+            </span>
+            <div className="flex gap-1 flex-wrap">
+              <button
+                type="button"
+                disabled={langLocked}
+                onClick={() => setRecordLang('en')}
+                className={`px-3 py-1.5 rounded-lg text-[11px] font-bold ${
+                  recordLang === 'en'
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-slate-100 dark:bg-slate-800'
+                } disabled:opacity-60`}
+              >
+                {recordLang === 'en' && (
+                  <Check className="w-3.5 h-3.5 inline mr-1" />
+                )}
+                Tiếng Anh
+              </button>
+              <button
+                type="button"
+                disabled={langLocked}
+                onClick={() => setRecordLang('vi')}
+                className={`px-3 py-1.5 rounded-lg text-[11px] font-bold ${
+                  recordLang === 'vi'
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-slate-100 dark:bg-slate-800'
+                } disabled:opacity-60`}
+              >
+                {recordLang === 'vi' && (
+                  <Check className="w-3.5 h-3.5 inline mr-1" />
+                )}
+                Tiếng Việt
+              </button>
+            </div>
+          </div>
+          <p className="text-[10px] text-slate-500">
+            {recordLang === 'en'
+              ? 'STT tiếng Anh → hiện chữ Anh + dịch Việt.'
+              : 'STT tiếng Việt → hiện chữ tiếng Việt.'}
+          </p>
+        </section>
+
         <section className="bg-white dark:bg-slate-900 px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 flex flex-col gap-2 shrink-0">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
             <span className="text-[10px] font-extrabold uppercase text-slate-400">
@@ -615,9 +729,6 @@ export default function LiveRecordView({
                   {otherLabel}
                 </button>
               </div>
-              <p className="text-[10px] text-slate-500 sm:ml-auto">
-                Bấm đổi người trước khi họ nói.
-              </p>
             </div>
           )}
         </section>
@@ -632,12 +743,13 @@ export default function LiveRecordView({
                 (cat) => (
                   <button
                     key={cat}
-                    onClick={() => setCategory(cat)}
+                    disabled={langLocked}
+                    onClick={() => selectCategory(cat)}
                     className={`px-2.5 py-1 rounded-lg text-[11px] font-bold ${
                       category === cat
                         ? 'bg-blue-600 text-white'
                         : 'bg-slate-100 dark:bg-slate-800'
-                    }`}
+                    } disabled:opacity-60`}
                   >
                     {category === cat && (
                       <Check className="w-3.5 h-3.5 inline" />
@@ -658,11 +770,13 @@ export default function LiveRecordView({
           <div className="flex items-center gap-2 text-[10px] text-slate-400 font-bold">
             <Mic className="w-3.5 h-3.5 text-blue-600" />
             <span>
-              {micActive
-                ? talkMode === 'solo'
-                  ? `1 người · ${meLabel}`
-                  : `Hội thoại · ${currentSpeakerLabel()}`
-                : 'Chưa có mic'}
+              {!isRecording
+                ? 'Chưa bắt đầu'
+                : micActive
+                  ? talkMode === 'solo'
+                    ? `1 người · ${meLabel}`
+                    : `Hội thoại · ${currentSpeakerLabel()}`
+                  : 'Chưa có mic'}
             </span>
           </div>
           <div className="flex items-end gap-[2px] h-8 max-w-md w-full justify-end">
@@ -671,18 +785,22 @@ export default function LiveRecordView({
                 key={i}
                 style={{ height: `${height * 0.4}%` }}
                 className={`w-[3px] rounded-full ${
-                  micActive && !isPaused ? 'bg-blue-600' : 'bg-rose-400'
+                  micActive && isRecording && !isPaused
+                    ? 'bg-blue-600'
+                    : 'bg-slate-300 dark:bg-slate-700'
                 }`}
               />
             ))}
           </div>
         </section>
 
-        <section className="flex-1 flex flex-col bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 overflow-hidden min-h-[220px]">
-          <div className="px-4 py-2.5 border-b border-slate-100 dark:border-slate-800 flex justify-between items-center">
+        <section className="flex-1 min-h-0 flex flex-col bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 overflow-hidden">
+          <div className="px-4 py-2.5 border-b border-slate-100 dark:border-slate-800 flex justify-between items-center shrink-0">
             <span className="text-[10px] font-extrabold uppercase tracking-widest text-slate-500 flex items-center gap-1.5">
               <Languages className="w-4 h-4 text-blue-600" />
-              Song ngữ Anh → Việt (live)
+              {recordLang === 'en'
+                ? 'Song ngữ Anh → Việt (live)'
+                : 'Transcript tiếng Việt (live)'}
             </span>
             <button
               onClick={copyAll}
@@ -691,7 +809,10 @@ export default function LiveRecordView({
               <Copy className="w-3.5 h-3.5" /> Copy
             </button>
           </div>
-          <div ref={scrollRef} className="flex-1 p-4 overflow-y-auto space-y-3">
+          <div
+            ref={scrollRef}
+            className="flex-1 min-h-0 p-4 pb-6 overflow-y-auto space-y-3 overscroll-contain"
+          >
             {lines.map((line, idx) => {
               const isOther = line.speaker === otherLabel;
               return (
@@ -713,23 +834,38 @@ export default function LiveRecordView({
                     </span>
                     <span>· {line.time}</span>
                   </div>
-                  <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">
-                    Tiếng Anh
-                  </p>
-                  <p className="text-base md:text-lg font-bold">{line.text}</p>
-                  {line.translation ? (
+                  {recordLang === 'en' ? (
                     <>
-                      <p className="text-[10px] font-bold uppercase tracking-wider text-blue-500 mt-3 mb-1">
-                        Tiếng Việt
+                      <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">
+                        Tiếng Anh
                       </p>
-                      <p className="text-blue-600 font-semibold text-sm md:text-base pt-2 border-t border-dashed border-slate-200">
-                        {line.translation}
+                      <p className="text-base md:text-lg font-bold">
+                        {line.text}
                       </p>
+                      {line.translation ? (
+                        <>
+                          <p className="text-[10px] font-bold uppercase tracking-wider text-blue-500 mt-3 mb-1">
+                            Tiếng Việt
+                          </p>
+                          <p className="text-blue-600 font-semibold text-sm md:text-base pt-2 border-t border-dashed border-slate-200">
+                            {line.translation}
+                          </p>
+                        </>
+                      ) : (
+                        <p className="text-[11px] text-slate-400 italic mt-2">
+                          Đang dịch sang tiếng Việt...
+                        </p>
+                      )}
                     </>
                   ) : (
-                    <p className="text-[11px] text-slate-400 italic mt-2">
-                      Đang dịch sang tiếng Việt...
-                    </p>
+                    <>
+                      <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">
+                        Tiếng Việt
+                      </p>
+                      <p className="text-base md:text-lg font-bold">
+                        {line.text}
+                      </p>
+                    </>
                   )}
                 </div>
               );
@@ -744,15 +880,18 @@ export default function LiveRecordView({
             )}
             {!lines.length && !partialText && (
               <div className="py-12 text-center text-slate-500 text-sm">
-                Hãy nói tiếng Anh — chữ Anh hiện ngay, bản dịch tiếng Việt cập
-                nhật ngay bên dưới.
+                {isRecording
+                  ? recordLang === 'vi'
+                    ? 'Hãy nói tiếng Việt — chữ hiện ngay bên dưới.'
+                    : 'Hãy nói tiếng Anh — chữ Anh hiện ngay, bản dịch Việt cập nhật bên dưới.'
+                  : 'Chọn ngôn ngữ rồi bấm Bắt đầu để ghi âm.'}
               </div>
             )}
           </div>
         </section>
       </div>
 
-      <footer className="fixed md:absolute bottom-0 left-0 right-0 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-t border-slate-200 dark:border-slate-800 p-3 z-40 md:m-4 md:rounded-2xl md:border">
+      <footer className="shrink-0 bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 px-3 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] z-10">
         <div className="flex items-center justify-between w-full max-w-4xl mx-auto gap-4">
           <button
             onClick={() => void handleCancel()}
@@ -764,33 +903,53 @@ export default function LiveRecordView({
             Hủy
           </button>
           <div className="flex items-center gap-3">
-            <button
-              onClick={togglePause}
-              className="w-11 h-11 rounded-full border flex items-center justify-center"
-            >
-              {isPaused ? (
-                <Play className="w-4 h-4 fill-current" />
-              ) : (
-                <Pause className="w-4 h-4" />
-              )}
-            </button>
-            <button
-              onClick={() => void handleSave()}
-              disabled={saving}
-              className="w-16 h-16 bg-blue-600 hover:bg-blue-700 rounded-full text-white shadow-lg border-4 border-white dark:border-slate-950 disabled:opacity-50"
-            >
-              <Mic className="w-6 h-6 mx-auto animate-pulse" />
-            </button>
+            {isRecording ? (
+              <>
+                <button
+                  onClick={togglePause}
+                  className="w-11 h-11 rounded-full border flex items-center justify-center"
+                >
+                  {isPaused ? (
+                    <Play className="w-4 h-4 fill-current" />
+                  ) : (
+                    <Pause className="w-4 h-4" />
+                  )}
+                </button>
+                <button
+                  onClick={() => void handleSave()}
+                  disabled={saving}
+                  className="w-16 h-16 bg-blue-600 hover:bg-blue-700 rounded-full text-white shadow-lg border-4 border-white dark:border-slate-950 disabled:opacity-50"
+                  title="Lưu"
+                >
+                  <Save className="w-6 h-6 mx-auto" />
+                </button>
+              </>
+            ) : (
+              <button
+                onClick={() => void startRecording()}
+                disabled={starting}
+                className="w-16 h-16 bg-rose-600 hover:bg-rose-700 rounded-full text-white shadow-lg border-4 border-white dark:border-slate-950 disabled:opacity-50 flex items-center justify-center"
+                title="Bắt đầu"
+              >
+                <Mic className="w-7 h-7" />
+              </button>
+            )}
           </div>
           <button
-            onClick={() => void handleSave()}
-            disabled={saving}
+            onClick={() =>
+              isRecording ? void handleSave() : void startRecording()
+            }
+            disabled={saving || starting}
             className="flex flex-col items-center text-[10px] font-extrabold text-blue-600"
           >
             <div className="w-10 h-10 rounded-full bg-blue-50 dark:bg-blue-950/40 flex items-center justify-center">
-              <Save className="w-4 h-4" />
+              {isRecording ? (
+                <Save className="w-4 h-4" />
+              ) : (
+                <Play className="w-4 h-4 fill-current" />
+              )}
             </div>
-            {saving ? '...' : 'Lưu'}
+            {saving ? '...' : starting ? '...' : isRecording ? 'Lưu' : 'Bắt đầu'}
           </button>
         </div>
       </footer>

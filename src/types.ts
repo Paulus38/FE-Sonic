@@ -17,7 +17,7 @@ export interface DictionaryItem {
   phonetic?: string;
   definition: string;
   example: string;
-  category: 'Học Tiếng Anh' | 'Phỏng vấn' | 'Họp Khách hàng' | string;
+  category: 'Học Tiếng Anh' | 'Phỏng vấn' | 'Cuộc họp' | string;
 }
 
 export interface Recording {
@@ -47,4 +47,28 @@ export interface UserSettings {
   sampleRate: number;
   aiNoiseCancellation: boolean;
   theme: 'light' | 'dark';
+  role?: 'user' | 'admin';
+  id?: string;
 }
+
+export type AiUsageSummary = {
+  userId: string;
+  totalPromptTokens: number;
+  totalCompletionTokens: number;
+  totalTokens: number;
+  requestCount: number;
+  byFeature: Record<string, number>;
+  updatedAt: string | null;
+  email?: string | null;
+  name?: string | null;
+};
+
+export type AiUsageEvent = {
+  id: string;
+  feature: string;
+  model: string;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  createdAt: string;
+};
