@@ -24,6 +24,8 @@ import { Recording, UserSettings } from '../types';
 interface LibraryViewProps {
   recordings: Recording[];
   settings: UserSettings;
+  loading?: boolean;
+  loadError?: string;
   onSelectRecording: (rec: Recording) => void;
   onPlay: (rec: Recording) => void;
   onDelete: (id: string) => void;
@@ -34,6 +36,8 @@ interface LibraryViewProps {
 export default function LibraryView({
   recordings,
   settings,
+  loading = false,
+  loadError = '',
   onSelectRecording,
   onPlay,
   onDelete,
@@ -221,7 +225,17 @@ export default function LibraryView({
         </div>
 
         {/* Recording Cards Grid */}
-        {sortedRecordings.length === 0 ? (
+        {loading ? (
+          <div className="text-center py-16 bg-white dark:bg-slate-900/40 border border-dashed border-slate-200 dark:border-slate-800 rounded-2xl p-8">
+            <p className="text-sm font-bold text-slate-700 dark:text-slate-300">
+              Đang tải bản ghi…
+            </p>
+          </div>
+        ) : loadError ? (
+          <div className="text-center py-16 bg-white dark:bg-slate-900/40 border border-dashed border-rose-200 dark:border-rose-900 rounded-2xl p-8">
+            <p className="text-sm font-bold text-rose-600">{loadError}</p>
+          </div>
+        ) : sortedRecordings.length === 0 ? (
           <div className="text-center py-16 bg-white dark:bg-slate-900/40 border border-dashed border-slate-200 dark:border-slate-800 rounded-2xl p-8">
             <Search className="w-12 h-12 text-slate-300 dark:text-slate-700 mx-auto mb-3" />
             <p className="text-sm font-bold text-slate-700 dark:text-slate-300">Không tìm thấy bản ghi nào</p>

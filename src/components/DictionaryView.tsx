@@ -23,12 +23,14 @@ import {
 
 interface DictionaryViewProps {
   dictionaryItems: DictionaryItem[];
+  loading?: boolean;
   onAddWord: (item: Omit<DictionaryItem, 'id'>) => void;
   onDeleteWord: (id: string) => void;
 }
 
 export default function DictionaryView({ 
-  dictionaryItems, 
+  dictionaryItems,
+  loading = false,
   onAddWord, 
   onDeleteWord,
 }: DictionaryViewProps) {
@@ -326,7 +328,13 @@ export default function DictionaryView({
         </div>
 
         {/* Dictionary Grid */}
-        {filteredItems.length === 0 ? (
+        {loading ? (
+          <div className="text-center py-16 bg-white dark:bg-slate-900/40 border border-dashed border-slate-200 dark:border-slate-800 rounded-2xl p-8">
+            <p className="text-sm font-bold text-slate-700 dark:text-slate-300">
+              Đang tải từ điển…
+            </p>
+          </div>
+        ) : filteredItems.length === 0 ? (
           <div className="text-center py-16 bg-white dark:bg-slate-900/40 border border-dashed border-slate-200 dark:border-slate-800 rounded-2xl p-8">
             <BookOpen className="w-12 h-12 text-slate-300 dark:text-slate-700 mx-auto mb-3" />
             <p className="text-sm font-bold text-slate-700 dark:text-slate-300">Từ điển chưa có từ vựng nào</p>

@@ -37,14 +37,46 @@ const emptySettings: UserSettings = {
   role: 'user',
 };
 
+function mapMeToSettings(
+  me: UserSettings & { id: string; role?: 'user' | 'admin' },
+): UserSettings {
+  return {
+    name: me.name,
+    email: me.email,
+    avatar: me.avatar || '',
+    primaryLang: me.primaryLang,
+    secondaryLang: me.secondaryLang,
+    sampleRate: me.sampleRate,
+    aiNoiseCancellation: me.aiNoiseCancellation,
+    theme: me.theme,
+    role: me.role || 'user',
+    id: me.id,
+  };
+}
+
+function filterLibraryItems(items: Recording[]): Recording[] {
+  return items.filter(
+    (r) =>
+      !r.status ||
+      r.status === 'ready' ||
+      r.status === 'processing' ||
+      r.status === 'recording',
+  );
+}
+
 export default function App() {
   const [token, setTokenState] = useState<string | null>(
     () => localStorage.getItem('sonic_token'),
   );
+  /** Only blocks shell while validating session (`/users/me`). */
   const [bootstrapping, setBootstrapping] = useState(!!token);
   const [recordings, setRecordings] = useState<Recording[]>([]);
+  const [recordingsLoaded, setRecordingsLoaded] = useState(false);
+  const [recordingsLoading, setRecordingsLoading] = useState(false);
   const [settings, setSettings] = useState<UserSettings>(emptySettings);
   const [dictionaryItems, setDictionaryItems] = useState<DictionaryItem[]>([]);
+  const [dictionaryLoaded, setDictionaryLoaded] = useState(false);
+  const [dictionaryLoading, setDictionaryLoading] = useState(false);
   const [currentTab, setCurrentTab] = useState<string>('recordings');
   const [selectedRecording, setSelectedRecording] = useState<Recording | null>(
     null,
@@ -58,65 +90,121 @@ export default function App() {
   const [storageUsedBytes, setStorageUsedBytes] = useState(0);
   const [storageQuotaBytes, setStorageQuotaBytes] = useState(1024 * 1024 * 1024);
   const [storageLoading, setStorageLoading] = useState(false);
+  const [storageLoaded, setStorageLoaded] = useState(false);
 
-  const refreshStorage = useCallback(async () => {
+  const refreshStorage = useCallback(async (force = false) => {
+    if (!force && storageLoaded) return;
     setStorageLoading(true);
     try {
       const usage = await usersApi.storage();
       setStorageUsedBytes(usage.usedBytes || 0);
       setStorageQuotaBytes(usage.quotaBytes || 1024 * 1024 * 1024);
+      setStorageLoaded(true);
     } catch {
       // keep last known values
     } finally {
       setStorageLoading(false);
     }
-  }, []);
+  }, [storageLoaded]);
 
-  const refreshData = useCallback(async () => {
-    const [recs, dict, me] = await Promise.all([
-      recordingsApi.list(),
-      dictionaryApi.list(),
-      usersApi.me(),
-    ]);
-    setRecordings(
-      recs.items.filter(
-        (r) =>
-          !r.status ||
-          r.status === 'ready' ||
-          r.status === 'processing' ||
-          r.status === 'recording',
-      ),
-    );
-    setDictionaryItems(dict.items);
-    setSettings({
-      name: me.name,
-      email: me.email,
-      avatar: me.avatar || '',
-      primaryLang: me.primaryLang,
-      secondaryLang: me.secondaryLang,
-      sampleRate: me.sampleRate,
-      aiNoiseCancellation: me.aiNoiseCancellation,
-      theme: me.theme,
-      role: me.role || 'user',
-      id: me.id,
-    });
-    void refreshStorage();
-  }, [refreshStorage]);
+  const refreshRecordings = useCallback(async (force = false) => {
+    if (!force && recordingsLoaded) return;
+    setRecordingsLoading(true);
+    setLoadError('');
+    try {
+      const recs = await recordingsApi.list();
+      setRecordings(filterLibraryItems(recs.items));
+      setRecordingsLoaded(true);
+    } catch (err) {
+      setLoadError(
+        err instanceof Error ? err.message : 'Không tải được danh sách bản ghi',
+      );
+    } finally {
+      setRecordingsLoading(false);
+    }
+  }, [recordingsLoaded]);
 
+  const refreshDictionary = useCallback(async (force = false) => {
+    if (!force && dictionaryLoaded) return;
+    setDictionaryLoading(true);
+    try {
+      const dict = await dictionaryApi.list();
+      setDictionaryItems(dict.items);
+      setDictionaryLoaded(true);
+    } catch (err) {
+      setToast({
+        type: 'error',
+        message:
+          err instanceof Error ? err.message : 'Không tải được từ điển',
+      });
+    } finally {
+      setDictionaryLoading(false);
+    }
+  }, [dictionaryLoaded]);
+
+  // F5 / session restore: only validate user — never preload all screens.
   useEffect(() => {
     if (!token) {
       setBootstrapping(false);
+      setRecordings([]);
+      setRecordingsLoaded(false);
+      setDictionaryItems([]);
+      setDictionaryLoaded(false);
+      setStorageLoaded(false);
       return;
     }
+    let cancelled = false;
     setBootstrapping(true);
-    refreshData()
+    usersApi
+      .me()
+      .then((me) => {
+        if (cancelled) return;
+        setSettings(mapMeToSettings(me));
+      })
       .catch((err) => {
-        setLoadError(err instanceof Error ? err.message : 'Không tải được dữ liệu');
+        if (cancelled) return;
+        setLoadError(
+          err instanceof Error ? err.message : 'Phiên đăng nhập hết hạn',
+        );
         setToken(null);
         setTokenState(null);
       })
-      .finally(() => setBootstrapping(false));
-  }, [token, refreshData]);
+      .finally(() => {
+        if (!cancelled) setBootstrapping(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
+
+  // Load data only when the active screen needs it.
+  useEffect(() => {
+    if (!token || bootstrapping) return;
+
+    const needsRecordings =
+      currentTab === 'recordings' ||
+      currentTab === 'translations' ||
+      currentTab === 'analytics' ||
+      currentTab === 'dashboard';
+
+    const needsDictionary =
+      currentTab === 'dictionary' ||
+      currentTab === 'analytics' ||
+      currentTab === 'dashboard';
+
+    if (needsRecordings) void refreshRecordings();
+    if (needsDictionary) void refreshDictionary();
+
+    // Sidebar storage meter — fetch once after session is ready, non-blocking.
+    void refreshStorage();
+  }, [
+    token,
+    bootstrapping,
+    currentTab,
+    refreshRecordings,
+    refreshDictionary,
+    refreshStorage,
+  ]);
 
   useEffect(() => {
     if (settings.theme === 'dark') {
@@ -138,18 +226,11 @@ export default function App() {
         onAuthenticated={(user, accessToken) => {
           setToken(accessToken);
           setTokenState(accessToken);
-          setSettings({
-            name: user.name,
-            email: user.email,
-            avatar: user.avatar || '',
-            primaryLang: user.primaryLang,
-            secondaryLang: user.secondaryLang,
-            sampleRate: user.sampleRate,
-            aiNoiseCancellation: user.aiNoiseCancellation,
-            theme: user.theme,
-            role: (user as { role?: 'user' | 'admin' }).role || 'user',
-            id: (user as { id?: string }).id,
-          });
+          setSettings(mapMeToSettings(user as UserSettings & { id: string }));
+          setRecordingsLoaded(false);
+          setDictionaryLoaded(false);
+          setStorageLoaded(false);
+          setBootstrapping(false);
         }}
       />
     );
@@ -197,7 +278,7 @@ export default function App() {
         setCurrentTab('recordings');
       }
       setToast({ type: 'success', message: 'Đã xóa bản ghi trên cloud.' });
-      void refreshStorage();
+      void refreshStorage(true);
     } catch (err) {
       setToast({
         type: 'error',
@@ -210,6 +291,7 @@ export default function App() {
 
   const handleSaveNewRecording = async (newRec: Recording) => {
     setRecordings((prev) => [newRec, ...prev.filter((r) => r.id !== newRec.id)]);
+    setRecordingsLoaded(true);
     setCurrentTab('recordings');
     setToast({
       type: 'success',
@@ -217,21 +299,8 @@ export default function App() {
         ? 'Đã lưu bản ghi (có audio + transcript).'
         : 'Đã lưu transcript (audio upload chưa thành công).',
     });
-    try {
-      const recs = await recordingsApi.list();
-      setRecordings(
-      recs.items.filter(
-        (r) =>
-          !r.status ||
-          r.status === 'ready' ||
-          r.status === 'processing' ||
-          r.status === 'recording',
-      ),
-    );
-    } catch {
-      // keep optimistic list
-    }
-    void refreshStorage();
+    void refreshRecordings(true);
+    void refreshStorage(true);
   };
 
   const handleAddWordToDictionary = async (
@@ -239,12 +308,13 @@ export default function App() {
   ) => {
     const created = await dictionaryApi.create(item);
     setDictionaryItems((prev) => [created, ...prev]);
+    setDictionaryLoaded(true);
   };
 
   const handleDeleteWordFromDictionary = async (id: string) => {
     await dictionaryApi.remove(id);
     setDictionaryItems((prev) => prev.filter((item) => item.id !== id));
-    void refreshStorage();
+    void refreshStorage(true);
   };
 
   const handleRegenerateSummary = async (recordingId: string) => {
@@ -266,6 +336,8 @@ export default function App() {
           <LibraryView
             recordings={recordings}
             settings={settings}
+            loading={recordingsLoading && !recordingsLoaded}
+            loadError={loadError}
             onSelectRecording={(rec) => void handleSelectRecording(rec)}
             onPlay={setPlayingRecording}
             onDelete={(id) => void handleDeleteRecording(id)}
@@ -311,6 +383,7 @@ export default function App() {
         return (
           <DictionaryView
             dictionaryItems={dictionaryItems}
+            loading={dictionaryLoading && !dictionaryLoaded}
             onAddWord={(item) => void handleAddWordToDictionary(item)}
             onDeleteWord={(id) => void handleDeleteWordFromDictionary(id)}
           />
@@ -344,7 +417,11 @@ export default function App() {
                   <p className="text-[10px] font-bold uppercase text-slate-500">
                     Bản ghi
                   </p>
-                  <p className="text-2xl font-black">{recordings.length}</p>
+                  <p className="text-2xl font-black">
+                    {recordingsLoading && !recordingsLoaded
+                      ? '…'
+                      : recordings.length}
+                  </p>
                 </div>
               </div>
               <div className="bg-white dark:bg-slate-900 p-5 rounded-2xl border flex items-center gap-4">
@@ -353,7 +430,11 @@ export default function App() {
                   <p className="text-[10px] font-bold uppercase text-slate-500">
                     Từ vựng
                   </p>
-                  <p className="text-2xl font-black">{dictionaryItems.length}</p>
+                  <p className="text-2xl font-black">
+                    {dictionaryLoading && !dictionaryLoaded
+                      ? '…'
+                      : dictionaryItems.length}
+                  </p>
                 </div>
               </div>
               <div className="bg-white dark:bg-slate-900 p-5 rounded-2xl border flex items-center gap-4">
@@ -372,25 +453,29 @@ export default function App() {
         return (
           <div className="flex-1 overflow-y-auto px-4 md:px-10 py-6 pb-24">
             <h2 className="text-xl font-extrabold mb-4">Thư viện song ngữ</h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {recordings
-                .filter((r) => r.isTranslated)
-                .map((rec) => (
-                  <button
-                    key={rec.id}
-                    onClick={() => void handleSelectRecording(rec)}
-                    className="text-left bg-white dark:bg-slate-900 p-5 rounded-2xl border hover:border-blue-600"
-                  >
-                    <span className="text-[10px] font-extrabold text-blue-600 flex items-center gap-1">
-                      <Languages className="w-3.5 h-3.5" /> Song ngữ
-                    </span>
-                    <h3 className="font-extrabold mt-2">{rec.title}</h3>
-                    <p className="text-xs text-slate-500 mt-1 line-clamp-2">
-                      {rec.summary}
-                    </p>
-                  </button>
-                ))}
-            </div>
+            {recordingsLoading && !recordingsLoaded ? (
+              <p className="text-sm text-slate-500 font-medium">Đang tải…</p>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {recordings
+                  .filter((r) => r.isTranslated)
+                  .map((rec) => (
+                    <button
+                      key={rec.id}
+                      onClick={() => void handleSelectRecording(rec)}
+                      className="text-left bg-white dark:bg-slate-900 p-5 rounded-2xl border hover:border-blue-600"
+                    >
+                      <span className="text-[10px] font-extrabold text-blue-600 flex items-center gap-1">
+                        <Languages className="w-3.5 h-3.5" /> Song ngữ
+                      </span>
+                      <h3 className="font-extrabold mt-2">{rec.title}</h3>
+                      <p className="text-xs text-slate-500 mt-1 line-clamp-2">
+                        {rec.summary}
+                      </p>
+                    </button>
+                  ))}
+              </div>
+            )}
           </div>
         );
       case 'analytics':
@@ -400,8 +485,10 @@ export default function App() {
               <BarChart3 className="w-6 h-6 text-blue-600" /> Phân tích
             </h2>
             <p className="text-sm text-slate-500">
-              Tổng {recordings.length} bản ghi · {dictionaryItems.length} từ
-              vựng đã lưu.
+              {(recordingsLoading && !recordingsLoaded) ||
+              (dictionaryLoading && !dictionaryLoaded)
+                ? 'Đang tải…'
+                : `Tổng ${recordings.length} bản ghi · ${dictionaryItems.length} từ vựng đã lưu.`}
             </p>
           </div>
         );
