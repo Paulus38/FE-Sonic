@@ -352,10 +352,22 @@ export default function App() {
   };
 
   const handleRegenerateSummary = async (recordingId: string) => {
-    const updated = await recordingsApi.summarize(recordingId);
-    setSelectedRecording(updated);
-    setRecordings((prev) => prev.map((r) => (r.id === updated.id ? updated : r)));
-    setToast({ type: 'success', message: 'Đã cập nhật tóm tắt AI.' });
+    try {
+      const updated = await recordingsApi.summarize(recordingId);
+      setSelectedRecording(updated);
+      setRecordings((prev) =>
+        prev.map((r) => (r.id === updated.id ? updated : r)),
+      );
+      setToast({ type: 'success', message: 'Đã tạo / cập nhật tóm tắt AI.' });
+      void refreshAiUsage(true);
+    } catch (err) {
+      setToast({
+        type: 'error',
+        message:
+          err instanceof Error ? err.message : 'Tóm tắt AI thất bại',
+      });
+      throw err;
+    }
   };
 
   const handleUpdateSettings = async (next: UserSettings) => {

@@ -35,7 +35,7 @@ interface DetailViewProps {
   recording: Recording;
   onBack: () => void;
   onAddWordToDictionary: (item: Omit<DictionaryItem, 'id'>) => void;
-  onRegenerateSummary: (recordingId: string) => void;
+  onRegenerateSummary: (recordingId: string) => void | Promise<void>;
 }
 
 export default function DetailView({ recording, onBack, onAddWordToDictionary, onRegenerateSummary }: DetailViewProps) {
@@ -47,6 +47,7 @@ export default function DetailView({ recording, onBack, onAddWordToDictionary, o
   const [volume, setVolume] = useState<number>(80);
   const [audioReady, setAudioReady] = useState(false);
   const [audioError, setAudioError] = useState('');
+  const [summarizing, setSummarizing] = useState(false);
   
   // Custom display modes for English learners
   const [showBilingual, setShowBilingual] = useState(true);
@@ -506,32 +507,51 @@ export default function DetailView({ recording, onBack, onAddWordToDictionary, o
           activeMobileTab === 'summary' ? 'block' : 'hidden md:block'
         }`}>
           
-          {/* AI Summary Card */}
+          {/* AI Summary Card — Gemini only runs when user clicks the button */}
           <section className="space-y-3">
             <div className="flex items-center gap-2">
-              <Sparkles className="w-4.5 h-4.5 text-blue-600 dark:text-blue-400 animate-pulse" />
+              <Sparkles className={`w-4.5 h-4.5 text-blue-600 dark:text-blue-400 ${summarizing ? 'animate-pulse' : ''}`} />
               <h3 className="text-xs font-extrabold uppercase tracking-widest text-slate-800 dark:text-slate-200">Phân tích & Tóm tắt AI</h3>
               <button
-                onClick={() => onRegenerateSummary(recording.id)}
-                className="ml-auto text-[10px] font-bold px-2 py-1 rounded-md bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400"
+                type="button"
+                disabled={summarizing}
+                onClick={() => {
+                  if (summarizing) return;
+                  setSummarizing(true);
+                  void Promise.resolve(onRegenerateSummary(recording.id)).finally(
+                    () => setSummarizing(false),
+                  );
+                }}
+                className="ml-auto text-[10px] font-bold px-2.5 py-1 rounded-md bg-blue-600 text-white disabled:opacity-60 disabled:cursor-not-allowed hover:bg-blue-700 transition-colors"
               >
-                Làm mới AI
+                {summarizing
+                  ? 'Đang tóm tắt...'
+                  : aiSummaryText
+                    ? 'Làm mới AI'
+                    : 'Tạo tóm tắt'}
               </button>
             </div>
             <div className="bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200/60 dark:border-slate-800/80 shadow-sm leading-relaxed transition-colors">
               <p className="text-[11px] text-slate-400 dark:text-slate-500 font-extrabold uppercase tracking-wider mb-2.5">
                 Các điểm cốt lõi:
               </p>
-              <ul className="space-y-2.5 text-slate-700 dark:text-slate-300 text-xs md:text-sm font-medium pl-3 list-disc">
-                {(aiSummaryText || 'Chưa có tóm tắt AI. Bấm "Làm mới AI".')
-                  .split('\n')
-                  .filter(Boolean)
-                  .map((bullet, idx) => (
-                  <li key={idx} className="leading-relaxed">
-                    {bullet.replace(/^-\s*/, '')}
-                  </li>
-                ))}
-              </ul>
+              {!aiSummaryText ? (
+                <p className="text-xs text-slate-500 dark:text-slate-400 font-medium leading-relaxed">
+                  Chưa có tóm tắt AI. Bấm <strong>Tạo tóm tắt</strong> khi cần —
+                  không tự chạy để tiết kiệm token.
+                </p>
+              ) : (
+                <ul className="space-y-2.5 text-slate-700 dark:text-slate-300 text-xs md:text-sm font-medium pl-3 list-disc">
+                  {aiSummaryText
+                    .split('\n')
+                    .filter(Boolean)
+                    .map((bullet, idx) => (
+                      <li key={idx} className="leading-relaxed">
+                        {bullet.replace(/^-\s*/, '')}
+                      </li>
+                    ))}
+                </ul>
+              )}
             </div>
           </section>
 

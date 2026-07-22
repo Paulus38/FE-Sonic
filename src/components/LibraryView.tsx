@@ -214,7 +214,7 @@ export default function LibraryView({
               <span>Đồng hành cùng bạn học Tiếng Anh, phỏng vấn & họp khách hàng</span>
             </h3>
             <p className="text-xs text-slate-600 dark:text-slate-400 mt-1">
-              Ghi âm cuộc họp hoặc buổi học của bạn. Sonic Scribe sẽ tự động tạo bản dịch song ngữ Anh-Việt, tóm tắt ý chính và đề xuất từ vựng quan trọng giúp bạn nâng cao năng lực tiếng Anh mỗi ngày!
+              Ghi âm cuộc họp hoặc buổi học của bạn. Sonic Scribe tạo bản dịch song ngữ Anh-Việt realtime; tóm tắt AI chỉ chạy khi bạn bấm nút trên trang chi tiết để tiết kiệm token.
             </p>
           </div>
           <button 

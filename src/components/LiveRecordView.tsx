@@ -519,7 +519,8 @@ export default function LiveRecordView({
             translation,
           }),
         ),
-        generateSummary: true,
+        // Don't auto-call Gemini on save — user triggers summary from Detail view.
+        generateSummary: false,
       });
 
       await cleanup();
