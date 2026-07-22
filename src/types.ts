@@ -60,9 +60,11 @@ export type AiUsageSummary = {
   totalTokens: number;
   requestCount: number;
   byFeature: Record<string, number>;
+  byModel?: Record<string, number>;
   updatedAt: string | null;
   email?: string | null;
   name?: string | null;
+  quotaTokens?: number;
 };
 
 export type AiUsageEvent = {

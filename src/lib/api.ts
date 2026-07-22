@@ -100,6 +100,8 @@ export const aiApi = {
     apiRequest<{
       summary: import('../types').AiUsageSummary;
       events: import('../types').AiUsageEvent[];
+      usedTokens: number;
+      quotaTokens: number;
     }>('/api/v1/ai/usage'),
   usageAll: () =>
     apiRequest<{ items: import('../types').AiUsageSummary[] }>(

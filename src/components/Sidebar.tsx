@@ -23,12 +23,22 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
+function formatTokens(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return '0';
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return String(Math.round(n));
+}
+
 interface SidebarProps {
   currentTab: string;
   setCurrentTab: (tab: string) => void;
   storageUsedBytes?: number;
   storageQuotaBytes?: number;
   storageLoading?: boolean;
+  aiUsedTokens?: number;
+  aiQuotaTokens?: number;
+  aiUsageLoading?: boolean;
   isAdmin?: boolean;
 }
 
@@ -38,6 +48,9 @@ export default function Sidebar({
   storageUsedBytes = 0,
   storageQuotaBytes = 1024 * 1024 * 1024,
   storageLoading = false,
+  aiUsedTokens = 0,
+  aiQuotaTokens = 1_500_000,
+  aiUsageLoading = false,
   isAdmin = false,
 }: SidebarProps) {
   const navItems = [
@@ -54,6 +67,8 @@ export default function Sidebar({
 
   const quota = storageQuotaBytes > 0 ? storageQuotaBytes : 1;
   const storagePercentage = Math.min(100, (storageUsedBytes / quota) * 100);
+  const tokenQuota = aiQuotaTokens > 0 ? aiQuotaTokens : 1;
+  const aiPercentage = Math.min(100, (aiUsedTokens / tokenQuota) * 100);
 
   // Navigation items optimized for mobile bottom bar (max 5 items)
   const mobileNavItems = [
@@ -126,6 +141,39 @@ export default function Sidebar({
               <Cloud className="w-20 h-20 text-slate-900 dark:text-white" />
             </div>
           </div>
+
+          {/* AI Token Panel */}
+          <button
+            type="button"
+            onClick={() => setCurrentTab('ai_usage')}
+            className="w-full text-left bg-slate-100 dark:bg-slate-800/80 rounded-xl p-3.5 relative overflow-hidden group hover:ring-1 hover:ring-violet-400/40 transition-all"
+          >
+            <div className="relative z-10">
+              <p className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1">
+                Dung lượng token AI
+              </p>
+              <div className="w-full h-1.5 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden mb-2">
+                <div
+                  className={`h-full rounded-full transition-all duration-300 ${
+                    aiPercentage >= 90
+                      ? 'bg-rose-500'
+                      : aiPercentage >= 70
+                        ? 'bg-amber-500'
+                        : 'bg-violet-600 dark:bg-violet-500'
+                  }`}
+                  style={{ width: `${aiPercentage}%` }}
+                />
+              </div>
+              <p className="text-xs font-semibold text-slate-600 dark:text-slate-300">
+                {aiUsageLoading
+                  ? 'Đang đo tokens...'
+                  : `${formatTokens(aiUsedTokens)} / ${formatTokens(aiQuotaTokens)} (${Math.round(aiPercentage)}%)`}
+              </p>
+            </div>
+            <div className="absolute -right-4 -bottom-4 opacity-5 group-hover:scale-110 transition-transform duration-300">
+              <Zap className="w-20 h-20 text-slate-900 dark:text-white" />
+            </div>
+          </button>
 
           {/* Support & Profile */}
           <div className="space-y-1">

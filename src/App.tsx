@@ -17,6 +17,7 @@ import {
   recordingsApi,
   setToken,
   usersApi,
+  aiApi,
 } from './lib/api';
 import {
   Languages,
@@ -98,6 +99,10 @@ export default function App() {
   const [storageQuotaBytes, setStorageQuotaBytes] = useState(1024 * 1024 * 1024);
   const [storageLoading, setStorageLoading] = useState(false);
   const [storageLoaded, setStorageLoaded] = useState(false);
+  const [aiUsedTokens, setAiUsedTokens] = useState(0);
+  const [aiQuotaTokens, setAiQuotaTokens] = useState(1_500_000);
+  const [aiUsageLoading, setAiUsageLoading] = useState(false);
+  const [aiUsageLoaded, setAiUsageLoaded] = useState(false);
 
   const refreshStorage = useCallback(async (force = false) => {
     if (!force && storageLoaded) return;
@@ -113,6 +118,21 @@ export default function App() {
       setStorageLoading(false);
     }
   }, [storageLoaded]);
+
+  const refreshAiUsage = useCallback(async (force = false) => {
+    if (!force && aiUsageLoaded) return;
+    setAiUsageLoading(true);
+    try {
+      const usage = await aiApi.usage();
+      setAiUsedTokens(usage.usedTokens ?? usage.summary?.totalTokens ?? 0);
+      setAiQuotaTokens(usage.quotaTokens || 1_500_000);
+      setAiUsageLoaded(true);
+    } catch {
+      // keep last known values
+    } finally {
+      setAiUsageLoading(false);
+    }
+  }, [aiUsageLoaded]);
 
   const refreshRecordings = useCallback(async (force = false) => {
     if (!force && recordingsLoaded) return;
@@ -158,6 +178,7 @@ export default function App() {
       setDictionaryItems([]);
       setDictionaryLoaded(false);
       setStorageLoaded(false);
+      setAiUsageLoaded(false);
       return;
     }
     let cancelled = false;
@@ -202,8 +223,9 @@ export default function App() {
     if (needsRecordings) void refreshRecordings();
     if (needsDictionary) void refreshDictionary();
 
-    // Sidebar storage meter — fetch once after session is ready, non-blocking.
+    // Sidebar meters — fetch once after session is ready, non-blocking.
     void refreshStorage();
+    void refreshAiUsage();
   }, [
     token,
     bootstrapping,
@@ -211,6 +233,7 @@ export default function App() {
     refreshRecordings,
     refreshDictionary,
     refreshStorage,
+    refreshAiUsage,
   ]);
 
   useEffect(() => {
@@ -237,6 +260,7 @@ export default function App() {
           setRecordingsLoaded(false);
           setDictionaryLoaded(false);
           setStorageLoaded(false);
+          setAiUsageLoaded(false);
           setBootstrapping(false);
         }}
       />
@@ -310,6 +334,7 @@ export default function App() {
     });
     void refreshRecordings(true);
     void refreshStorage(true);
+    void refreshAiUsage(true);
   };
 
   const handleAddWordToDictionary = async (
@@ -406,7 +431,13 @@ export default function App() {
           />
         );
       case 'ai_usage':
-        return <AiUsageView isAdmin={settings.role === 'admin'} />;
+        return (
+          <AiUsageView
+            isAdmin={settings.role === 'admin'}
+            usedTokens={aiUsedTokens}
+            quotaTokens={aiQuotaTokens}
+          />
+        );
       case 'admin':
         return settings.role === 'admin' ? (
           <AdminUsersView currentUserId={settings.id} />
@@ -496,6 +527,9 @@ export default function App() {
         storageUsedBytes={storageUsedBytes}
         storageQuotaBytes={storageQuotaBytes}
         storageLoading={storageLoading}
+        aiUsedTokens={aiUsedTokens}
+        aiQuotaTokens={aiQuotaTokens}
+        aiUsageLoading={aiUsageLoading}
         isAdmin={settings.role === 'admin'}
       />
       <main className="flex-1 flex flex-col h-screen overflow-hidden relative">
