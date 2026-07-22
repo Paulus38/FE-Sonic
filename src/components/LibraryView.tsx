@@ -1,7 +1,6 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { 
   Search, 
-  Bell, 
   Settings, 
   Plus, 
   Calendar, 
@@ -11,7 +10,8 @@ import {
   Trash2, 
   Play,
   ChevronDown,
-  MoreVertical,
+  ChevronLeft,
+  ChevronRight,
   CheckCircle2,
   BookOpen,
   Filter,
@@ -20,6 +20,19 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Recording, UserSettings } from '../types';
+
+const PAGE_SIZE = 9;
+
+function recordingTimestamp(rec: Recording): number {
+  if (rec.createdAt) {
+    const t = Date.parse(rec.createdAt);
+    if (!Number.isNaN(t)) return t;
+  }
+  // Fallback: try parsing locale date string (less reliable)
+  const parsed = Date.parse(rec.date);
+  if (!Number.isNaN(parsed)) return parsed;
+  return 0;
+}
 
 interface LibraryViewProps {
   recordings: Recording[];
@@ -47,30 +60,47 @@ export default function LibraryView({
   const [searchQuery, setSearchQuery] = useState('');
   const [activeFilter, setActiveFilter] = useState<'Tất cả' | 'Cuộc họp' | 'Phỏng vấn' | 'Học Tiếng Anh'>('Tất cả');
   const [sortBy, setSortBy] = useState<'mới nhất' | 'cũ nhất'>('mới nhất');
+  const [page, setPage] = useState(1);
   const [isMobileSearchOpen, setIsMobileSearchOpen] = useState(false);
 
-  // Filter and Search logic
-  const filteredRecordings = recordings.filter(rec => {
-    const matchesSearch =
-      rec.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (rec.summary || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (rec.tags || []).some((t) =>
-        t.toLowerCase().includes(searchQuery.toLowerCase()),
-      );
-    
-    const matchesFilter = activeFilter === 'Tất cả' ? true : rec.category === activeFilter;
-    return matchesSearch && matchesFilter;
-  });
+  const filteredAndSorted = useMemo(() => {
+    const filtered = recordings.filter((rec) => {
+      const q = searchQuery.toLowerCase();
+      const matchesSearch =
+        rec.title.toLowerCase().includes(q) ||
+        (rec.summary || '').toLowerCase().includes(q) ||
+        (rec.tags || []).some((t) => t.toLowerCase().includes(q));
+      const matchesFilter =
+        activeFilter === 'Tất cả' ? true : rec.category === activeFilter;
+      return matchesSearch && matchesFilter;
+    });
 
-  // Sort logic
-  const sortedRecordings = [...filteredRecordings].sort((a, b) => {
-    // Treat dates as fallback, but let's compare id/date
-    if (sortBy === 'mới nhất') {
-      return b.id.localeCompare(a.id);
-    } else {
-      return a.id.localeCompare(b.id);
-    }
-  });
+    return [...filtered].sort((a, b) => {
+      const diff = recordingTimestamp(b) - recordingTimestamp(a);
+      if (diff !== 0) return sortBy === 'mới nhất' ? diff : -diff;
+      return sortBy === 'mới nhất'
+        ? b.id.localeCompare(a.id)
+        : a.id.localeCompare(b.id);
+    });
+  }, [recordings, searchQuery, activeFilter, sortBy]);
+
+  const sortedRecordings = filteredAndSorted;
+
+  const totalPages = Math.max(1, Math.ceil(sortedRecordings.length / PAGE_SIZE));
+  const currentPage = Math.min(page, totalPages);
+  const pageStart = (currentPage - 1) * PAGE_SIZE;
+  const pagedRecordings = sortedRecordings.slice(
+    pageStart,
+    pageStart + PAGE_SIZE,
+  );
+
+  useEffect(() => {
+    setPage(1);
+  }, [searchQuery, activeFilter, sortBy]);
+
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
 
   return (
     <div className="flex-1 flex flex-col h-screen overflow-hidden bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 transition-colors">
@@ -123,6 +153,13 @@ export default function LibraryView({
             >
               <Settings className="w-5 h-5" />
             </button>
+            {settings.avatar ? (
+              <img
+                src={settings.avatar}
+                alt={settings.name}
+                className="hidden sm:block w-8 h-8 rounded-full object-cover border border-slate-200 dark:border-slate-700 ml-1"
+              />
+            ) : null}
           </div>
 
           <button 
@@ -211,12 +248,19 @@ export default function LibraryView({
           <div className="flex items-center justify-between sm:justify-end gap-3 text-xs text-slate-500 dark:text-slate-400 font-medium">
             <span className="flex items-center gap-1 text-[11px] uppercase tracking-wider text-slate-400">
               <Filter className="w-3 h-3" />
-              <span>{sortedRecordings.length} bản ghi</span>
+              <span>
+                {sortedRecordings.length} bản ghi
+                {sortedRecordings.length > PAGE_SIZE
+                  ? ` · trang ${currentPage}/${totalPages}`
+                  : ''}
+              </span>
             </span>
             
             <button 
+              type="button"
               onClick={() => setSortBy(sortBy === 'mới nhất' ? 'cũ nhất' : 'mới nhất')}
               className="flex items-center gap-1 text-slate-800 dark:text-slate-200 font-bold bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 px-3 py-1.5 rounded-lg min-h-[36px]"
+              title="Sắp xếp theo thời gian tạo"
             >
               <span>{sortBy === 'mới nhất' ? 'Mới nhất' : 'Cũ nhất'}</span>
               <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
@@ -251,8 +295,9 @@ export default function LibraryView({
             </button>
           </div>
         ) : (
+          <>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 md:gap-6">
-            {sortedRecordings.map((rec, index) => (
+            {pagedRecordings.map((rec, index) => (
               <motion.div 
                 key={rec.id}
                 initial={{ opacity: 0, y: 12 }}
@@ -380,7 +425,8 @@ export default function LibraryView({
               </motion.div>
             ))}
 
-            {/* Empty Slot card responsive */}
+            {/* Empty Slot card responsive — only on last page */}
+            {currentPage === totalPages && (
             <motion.div 
               onClick={onStartNewRecording}
               whileHover={{ scale: 1.01 }}
@@ -394,8 +440,79 @@ export default function LibraryView({
                 Học Tiếng Anh, ghi âm phỏng vấn hoặc cuộc họp khách hàng
               </p>
             </motion.div>
+            )}
 
           </div>
+
+          {sortedRecordings.length > PAGE_SIZE && (
+            <div className="mt-8 flex flex-col sm:flex-row items-center justify-between gap-3">
+              <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+                Hiển thị {pageStart + 1}–
+                {Math.min(pageStart + PAGE_SIZE, sortedRecordings.length)} /{' '}
+                {sortedRecordings.length}
+              </p>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled={currentPage <= 1}
+                  onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  className="inline-flex items-center gap-1 px-3 py-2 rounded-xl text-xs font-bold border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-50 dark:hover:bg-slate-800"
+                >
+                  <ChevronLeft className="w-3.5 h-3.5" />
+                  Trước
+                </button>
+                <div className="flex items-center gap-1">
+                  {Array.from({ length: totalPages }, (_, i) => i + 1)
+                    .filter((p) => {
+                      if (totalPages <= 7) return true;
+                      return (
+                        p === 1 ||
+                        p === totalPages ||
+                        Math.abs(p - currentPage) <= 1
+                      );
+                    })
+                    .reduce<number[]>((acc, p, idx, arr) => {
+                      if (idx > 0 && p - arr[idx - 1] > 1) acc.push(-1);
+                      acc.push(p);
+                      return acc;
+                    }, [])
+                    .map((p, idx) =>
+                      p === -1 ? (
+                        <span
+                          key={`ellipsis-${idx}`}
+                          className="px-1 text-slate-400 text-xs font-bold"
+                        >
+                          …
+                        </span>
+                      ) : (
+                        <button
+                          key={p}
+                          type="button"
+                          onClick={() => setPage(p)}
+                          className={`w-8 h-8 rounded-lg text-xs font-bold transition-colors ${
+                            p === currentPage
+                              ? 'bg-blue-600 text-white'
+                              : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
+                          }`}
+                        >
+                          {p}
+                        </button>
+                      ),
+                    )}
+                </div>
+                <button
+                  type="button"
+                  disabled={currentPage >= totalPages}
+                  onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                  className="inline-flex items-center gap-1 px-3 py-2 rounded-xl text-xs font-bold border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-50 dark:hover:bg-slate-800"
+                >
+                  Sau
+                  <ChevronRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+          )}
+          </>
         )}
 
       </div>

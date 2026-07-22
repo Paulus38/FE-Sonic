@@ -25,6 +25,8 @@ export interface Recording {
   title: string;
   category: 'Cuộc họp' | 'Phỏng vấn' | 'Học Tiếng Anh' | string;
   date: string;
+  /** ISO timestamp for reliable newest-first sorting */
+  createdAt?: string;
   duration: string;
   durationSec: number;
   summary: string;

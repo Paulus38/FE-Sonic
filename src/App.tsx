@@ -9,6 +9,8 @@ import DictionaryView from './components/DictionaryView';
 import AuthView from './components/AuthView';
 import AiUsageView from './components/AiUsageView';
 import AdminUsersView from './components/AdminUsersView';
+import DashboardView from './components/DashboardView';
+import AnalyticsView from './components/AnalyticsView';
 import { Recording, UserSettings, DictionaryItem } from './types';
 import {
   dictionaryApi,
@@ -17,12 +19,8 @@ import {
   usersApi,
 } from './lib/api';
 import {
-  Sparkles,
   Languages,
-  BookOpen,
-  BarChart3,
   HelpCircle,
-  Mic,
 } from 'lucide-react';
 
 const emptySettings: UserSettings = {
@@ -62,6 +60,15 @@ function filterLibraryItems(items: Recording[]): Recording[] {
       r.status === 'processing' ||
       r.status === 'recording',
   );
+}
+
+function sortNewestFirst(items: Recording[]): Recording[] {
+  return [...items].sort((a, b) => {
+    const ta = a.createdAt ? Date.parse(a.createdAt) : 0;
+    const tb = b.createdAt ? Date.parse(b.createdAt) : 0;
+    if (tb !== ta) return tb - ta;
+    return b.id.localeCompare(a.id);
+  });
 }
 
 export default function App() {
@@ -112,8 +119,8 @@ export default function App() {
     setRecordingsLoading(true);
     setLoadError('');
     try {
-      const recs = await recordingsApi.list();
-      setRecordings(filterLibraryItems(recs.items));
+      const recs = await recordingsApi.list(1, 100);
+      setRecordings(sortNewestFirst(filterLibraryItems(recs.items)));
       setRecordingsLoaded(true);
     } catch (err) {
       setLoadError(
@@ -290,7 +297,9 @@ export default function App() {
   };
 
   const handleSaveNewRecording = async (newRec: Recording) => {
-    setRecordings((prev) => [newRec, ...prev.filter((r) => r.id !== newRec.id)]);
+    setRecordings((prev) =>
+      sortNewestFirst([newRec, ...prev.filter((r) => r.id !== newRec.id)]),
+    );
     setRecordingsLoaded(true);
     setCurrentTab('recordings');
     setToast({
@@ -325,8 +334,16 @@ export default function App() {
   };
 
   const handleUpdateSettings = async (next: UserSettings) => {
-    setSettings(next);
-    await usersApi.updateSettings(next);
+    const updated = await usersApi.updateSettings({
+      name: next.name,
+      avatar: next.avatar,
+      primaryLang: next.primaryLang,
+      secondaryLang: next.secondaryLang,
+      sampleRate: next.sampleRate,
+      aiNoiseCancellation: next.aiNoiseCancellation,
+      theme: next.theme,
+    });
+    setSettings(mapMeToSettings(updated));
   };
 
   const renderContent = () => {
@@ -402,52 +419,19 @@ export default function App() {
         );
       case 'dashboard':
         return (
-          <div className="flex-1 overflow-y-auto px-4 md:px-10 py-6 bg-slate-50 dark:bg-slate-950 pb-24">
-            <h2 className="text-xl font-extrabold mb-1">Tổng quan hoạt động</h2>
-            <p className="text-xs text-slate-500 font-bold mb-6">
-              {settings.name}
-            </p>
-            {loadError && (
-              <p className="text-xs text-rose-600 mb-4">{loadError}</p>
-            )}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <div className="bg-white dark:bg-slate-900 p-5 rounded-2xl border flex items-center gap-4">
-                <Mic className="w-6 h-6 text-blue-600" />
-                <div>
-                  <p className="text-[10px] font-bold uppercase text-slate-500">
-                    Bản ghi
-                  </p>
-                  <p className="text-2xl font-black">
-                    {recordingsLoading && !recordingsLoaded
-                      ? '…'
-                      : recordings.length}
-                  </p>
-                </div>
-              </div>
-              <div className="bg-white dark:bg-slate-900 p-5 rounded-2xl border flex items-center gap-4">
-                <BookOpen className="w-6 h-6 text-emerald-500" />
-                <div>
-                  <p className="text-[10px] font-bold uppercase text-slate-500">
-                    Từ vựng
-                  </p>
-                  <p className="text-2xl font-black">
-                    {dictionaryLoading && !dictionaryLoaded
-                      ? '…'
-                      : dictionaryItems.length}
-                  </p>
-                </div>
-              </div>
-              <div className="bg-white dark:bg-slate-900 p-5 rounded-2xl border flex items-center gap-4">
-                <Sparkles className="w-6 h-6 text-purple-500" />
-                <div>
-                  <p className="text-[10px] font-bold uppercase text-slate-500">
-                    Song ngữ
-                  </p>
-                  <p className="text-2xl font-black">Realtime</p>
-                </div>
-              </div>
-            </div>
-          </div>
+          <DashboardView
+            settings={settings}
+            recordings={recordings}
+            dictionaryItems={dictionaryItems}
+            recordingsLoading={recordingsLoading && !recordingsLoaded}
+            dictionaryLoading={dictionaryLoading && !dictionaryLoaded}
+            loadError={loadError}
+            storageUsedBytes={storageUsedBytes}
+            storageQuotaBytes={storageQuotaBytes}
+            onSelectRecording={(rec) => void handleSelectRecording(rec)}
+            onStartNewRecording={() => setCurrentTab('recording_live')}
+            setCurrentTab={setCurrentTab}
+          />
         );
       case 'translations':
         return (
@@ -457,9 +441,8 @@ export default function App() {
               <p className="text-sm text-slate-500 font-medium">Đang tải…</p>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {recordings
-                  .filter((r) => r.isTranslated)
-                  .map((rec) => (
+                {sortNewestFirst(recordings.filter((r) => r.isTranslated)).map(
+                  (rec) => (
                     <button
                       key={rec.id}
                       onClick={() => void handleSelectRecording(rec)}
@@ -473,24 +456,21 @@ export default function App() {
                         {rec.summary}
                       </p>
                     </button>
-                  ))}
+                  ),
+                )}
               </div>
             )}
           </div>
         );
       case 'analytics':
         return (
-          <div className="flex-1 overflow-y-auto px-4 md:px-10 py-6 pb-24">
-            <h2 className="text-xl font-extrabold mb-4 flex items-center gap-2">
-              <BarChart3 className="w-6 h-6 text-blue-600" /> Phân tích
-            </h2>
-            <p className="text-sm text-slate-500">
-              {(recordingsLoading && !recordingsLoaded) ||
-              (dictionaryLoading && !dictionaryLoaded)
-                ? 'Đang tải…'
-                : `Tổng ${recordings.length} bản ghi · ${dictionaryItems.length} từ vựng đã lưu.`}
-            </p>
-          </div>
+          <AnalyticsView
+            recordings={recordings}
+            dictionaryItems={dictionaryItems}
+            recordingsLoading={recordingsLoading && !recordingsLoaded}
+            dictionaryLoading={dictionaryLoading && !dictionaryLoaded}
+            setCurrentTab={setCurrentTab}
+          />
         );
       case 'help':
         return (

@@ -86,10 +86,13 @@ export const usersApi = {
       source: string;
     }>('/api/v1/users/me/storage'),
   updateSettings: (body: Partial<import('../types').UserSettings>) =>
-    apiRequest('/api/v1/users/me/settings', {
-      method: 'PATCH',
-      body: JSON.stringify(body),
-    }),
+    apiRequest<import('../types').UserSettings & { id: string }>(
+      '/api/v1/users/me/settings',
+      {
+        method: 'PATCH',
+        body: JSON.stringify(body),
+      },
+    ),
 };
 
 export const aiApi = {
