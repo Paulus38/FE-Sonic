@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Mic, Lock, Mail, User, Sparkles } from 'lucide-react';
+import { Mic, Lock, Mail, User, Sparkles, Eye, EyeOff } from 'lucide-react';
 import { authApi, setToken } from '../lib/api';
 import { UserSettings } from '../types';
 
@@ -12,6 +12,7 @@ export default function AuthView({ onAuthenticated }: AuthViewProps) {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -93,16 +94,32 @@ export default function AuthView({ onAuthenticated }: AuthViewProps) {
               Mật khẩu
             </span>
             <div className="mt-1 flex items-center gap-2 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2.5">
-              <Lock className="w-4 h-4 text-slate-400" />
+              <Lock className="w-4 h-4 text-slate-400 shrink-0" />
               <input
-                type="password"
-                className="flex-1 bg-transparent outline-none text-sm font-medium"
+                type={showPassword ? 'text' : 'password'}
+                className="flex-1 bg-transparent outline-none text-sm font-medium min-w-0"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
                 minLength={8}
                 placeholder="Tối thiểu 8 ký tự"
+                autoComplete={
+                  mode === 'login' ? 'current-password' : 'new-password'
+                }
               />
+              <button
+                type="button"
+                onClick={() => setShowPassword((v) => !v)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 shrink-0"
+                aria-label={showPassword ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
+                title={showPassword ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
+              >
+                {showPassword ? (
+                  <EyeOff className="w-4 h-4" />
+                ) : (
+                  <Eye className="w-4 h-4" />
+                )}
+              </button>
             </div>
           </label>
 

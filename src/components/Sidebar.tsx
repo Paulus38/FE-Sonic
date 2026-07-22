@@ -155,8 +155,12 @@ export default function Sidebar({
         </div>
       </aside>
 
-      {/* MOBILE BOTTOM NAV */}
-      <nav className="md:hidden fixed bottom-0 left-0 right-0 h-16 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-t border-slate-200 dark:border-slate-800 flex items-center justify-around z-40 px-2 shadow-[0_-4px_24px_rgba(0,0,0,0.06)] pb-safe transition-colors">
+      {/* MOBILE BOTTOM NAV — ẩn khi đang ghi âm để không che nút điều khiển */}
+      <nav className={`md:hidden fixed bottom-0 left-0 right-0 h-16 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-t border-slate-200 dark:border-slate-800 flex items-center justify-around z-40 px-2 shadow-[0_-4px_24px_rgba(0,0,0,0.06)] pb-safe transition-colors ${
+        currentTab === 'recording_live' || currentTab === 'recording_detail'
+          ? 'hidden'
+          : ''
+      }`}>
         {mobileNavItems.map((item) => {
           const IconComponent = item.icon;
           const isActive = currentTab === item.id || (item.id === 'recordings' && (currentTab === 'recording_detail' || currentTab === 'recording_live'));

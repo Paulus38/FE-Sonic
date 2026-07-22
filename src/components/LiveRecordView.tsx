@@ -617,6 +617,82 @@ export default function LiveRecordView({
         </div>
       </header>
 
+      {/* Record controls at top so mobile bottom nav cannot cover Start/Save */}
+      <div className="shrink-0 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 px-3 py-2.5 z-20">
+        <div className="flex items-center justify-between w-full max-w-4xl mx-auto gap-3">
+          <button
+            type="button"
+            onClick={() => void handleCancel()}
+            className="flex flex-col items-center text-[10px] font-bold text-slate-500 min-w-[52px]"
+          >
+            <div className="w-10 h-10 rounded-full border border-slate-200 dark:border-slate-700 flex items-center justify-center">
+              <Square className="w-3.5 h-3.5" />
+            </div>
+            Hủy
+          </button>
+          <div className="flex items-center gap-3">
+            {isRecording ? (
+              <>
+                <button
+                  type="button"
+                  onClick={togglePause}
+                  className="w-11 h-11 rounded-full border border-slate-200 dark:border-slate-700 flex items-center justify-center"
+                  title={isPaused ? 'Tiếp tục' : 'Tạm dừng'}
+                >
+                  {isPaused ? (
+                    <Play className="w-4 h-4 fill-current" />
+                  ) : (
+                    <Pause className="w-4 h-4" />
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleSave()}
+                  disabled={saving}
+                  className="w-14 h-14 md:w-16 md:h-16 bg-blue-600 hover:bg-blue-700 rounded-full text-white shadow-lg border-4 border-white dark:border-slate-950 disabled:opacity-50"
+                  title="Lưu / Kết thúc"
+                >
+                  <Save className="w-6 h-6 mx-auto" />
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                onClick={() => void startRecording()}
+                disabled={starting}
+                className="w-14 h-14 md:w-16 md:h-16 bg-rose-600 hover:bg-rose-700 rounded-full text-white shadow-lg border-4 border-white dark:border-slate-950 disabled:opacity-50 flex items-center justify-center"
+                title="Bắt đầu"
+              >
+                <Mic className="w-7 h-7" />
+              </button>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={() =>
+              isRecording ? void handleSave() : void startRecording()
+            }
+            disabled={saving || starting}
+            className="flex flex-col items-center text-[10px] font-extrabold text-blue-600 min-w-[52px]"
+          >
+            <div className="w-10 h-10 rounded-full bg-blue-50 dark:bg-blue-950/40 flex items-center justify-center">
+              {isRecording ? (
+                <Save className="w-4 h-4" />
+              ) : (
+                <Play className="w-4 h-4 fill-current" />
+              )}
+            </div>
+            {saving
+              ? '...'
+              : starting
+                ? '...'
+                : isRecording
+                  ? 'Kết thúc'
+                  : 'Bắt đầu'}
+          </button>
+        </div>
+      </div>
+
       <div className="flex-1 min-h-0 flex flex-col p-3 md:p-4 gap-3 overflow-hidden">
         <section className="bg-white dark:bg-slate-900 px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 flex flex-col gap-2 shrink-0">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
@@ -890,69 +966,6 @@ export default function LiveRecordView({
           </div>
         </section>
       </div>
-
-      <footer className="shrink-0 bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 px-3 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] z-10">
-        <div className="flex items-center justify-between w-full max-w-4xl mx-auto gap-4">
-          <button
-            onClick={() => void handleCancel()}
-            className="flex flex-col items-center text-[10px] font-bold text-slate-500"
-          >
-            <div className="w-10 h-10 rounded-full border flex items-center justify-center">
-              <Square className="w-3.5 h-3.5" />
-            </div>
-            Hủy
-          </button>
-          <div className="flex items-center gap-3">
-            {isRecording ? (
-              <>
-                <button
-                  onClick={togglePause}
-                  className="w-11 h-11 rounded-full border flex items-center justify-center"
-                >
-                  {isPaused ? (
-                    <Play className="w-4 h-4 fill-current" />
-                  ) : (
-                    <Pause className="w-4 h-4" />
-                  )}
-                </button>
-                <button
-                  onClick={() => void handleSave()}
-                  disabled={saving}
-                  className="w-16 h-16 bg-blue-600 hover:bg-blue-700 rounded-full text-white shadow-lg border-4 border-white dark:border-slate-950 disabled:opacity-50"
-                  title="Lưu"
-                >
-                  <Save className="w-6 h-6 mx-auto" />
-                </button>
-              </>
-            ) : (
-              <button
-                onClick={() => void startRecording()}
-                disabled={starting}
-                className="w-16 h-16 bg-rose-600 hover:bg-rose-700 rounded-full text-white shadow-lg border-4 border-white dark:border-slate-950 disabled:opacity-50 flex items-center justify-center"
-                title="Bắt đầu"
-              >
-                <Mic className="w-7 h-7" />
-              </button>
-            )}
-          </div>
-          <button
-            onClick={() =>
-              isRecording ? void handleSave() : void startRecording()
-            }
-            disabled={saving || starting}
-            className="flex flex-col items-center text-[10px] font-extrabold text-blue-600"
-          >
-            <div className="w-10 h-10 rounded-full bg-blue-50 dark:bg-blue-950/40 flex items-center justify-center">
-              {isRecording ? (
-                <Save className="w-4 h-4" />
-              ) : (
-                <Play className="w-4 h-4 fill-current" />
-              )}
-            </div>
-            {saving ? '...' : starting ? '...' : isRecording ? 'Lưu' : 'Bắt đầu'}
-          </button>
-        </div>
-      </footer>
     </div>
   );
 }

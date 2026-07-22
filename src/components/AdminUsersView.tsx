@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Pencil, Plus, RefreshCw, Shield, Trash2, X } from 'lucide-react';
+import { Eye, EyeOff, Pencil, Plus, RefreshCw, Shield, Trash2, X } from 'lucide-react';
 import { adminApi } from '../lib/api';
 
 type AdminUser = {
@@ -36,6 +36,7 @@ export default function AdminUsersView({ currentUserId }: AdminUsersViewProps) {
   const [editing, setEditing] = useState<AdminUser | null>(null);
   const [form, setForm] = useState<FormState>(emptyForm);
   const [saving, setSaving] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<AdminUser | null>(null);
 
   const load = useCallback(async () => {
@@ -314,17 +315,31 @@ export default function AdminUsersView({ currentUserId }: AdminUsersViewProps) {
                   ? 'Mật khẩu (≥ 8 ký tự)'
                   : 'Mật khẩu mới (để trống nếu giữ nguyên)'}
               </span>
-              <input
-                type="password"
-                autoComplete="new-password"
-                required={modal === 'create'}
-                minLength={modal === 'create' ? 8 : undefined}
-                value={form.password}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, password: e.target.value }))
-                }
-                className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-sm outline-none"
-              />
+              <div className="flex items-center gap-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 px-3 py-2">
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  autoComplete="new-password"
+                  required={modal === 'create'}
+                  minLength={modal === 'create' ? 8 : undefined}
+                  value={form.password}
+                  onChange={(e) =>
+                    setForm((f) => ({ ...f, password: e.target.value }))
+                  }
+                  className="flex-1 min-w-0 bg-transparent text-sm outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((v) => !v)}
+                  className="p-1 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 shrink-0"
+                  aria-label={showPassword ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
+                >
+                  {showPassword ? (
+                    <EyeOff className="w-4 h-4" />
+                  ) : (
+                    <Eye className="w-4 h-4" />
+                  )}
+                </button>
+              </div>
             </label>
 
             <label className="block space-y-1">
