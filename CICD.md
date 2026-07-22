@@ -7,6 +7,17 @@
 | [`.github/workflows/ci.yml`](.github/workflows/ci.yml) | Push / PR → `main` | `npm ci` → `tsc` → `vite build` |
 | [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) | Manual (`workflow_dispatch`) | Build gate → deploy Vercel |
 
+## Gắn biến môi trường
+
+FE đã link: `pala3/sonic-scribe` → https://sonic-scribe-sigma.vercel.app
+
+```bash
+# Từ thư mục Record/ (đẩy cả BE + FE)
+node scripts/push-vercel-env.mjs
+```
+
+Hoặc chỉ FE trên Dashboard: Settings → Environment Variables → `VITE_API_URL=https://be-sonic.vercel.app` → Redeploy.
+
 ## Khuyến nghị CD: Vercel Git Integration
 
 1. [Vercel Dashboard](https://vercel.com/dashboard) → **Add New Project**

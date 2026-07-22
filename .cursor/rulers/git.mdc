@@ -1,0 +1,115 @@
+Git: đặt tên nhánh
+Format:
+
+<type>/<short-description>
+Type	Khi dùng
+feat/	Tính năng mới
+fix/	Sửa bug
+chore/	Việc phụ (config, deps, docs)
+refactor/	Refactor, không đổi hành vi
+docs/	Chỉ tài liệu
+hotfix/	Sửa gấp trên production
+Quy tắc mô tả: kebab-case, ngắn, tiếng Anh.
+
+feat/login-auth
+fix/sidebar-active-state
+chore/update-urd-docs
+refactor/state-context
+Nhánh chính: main. Tạo PR từ nhánh feature → main.
+
+Ví dụ tạo nhánh mới
+Luôn bắt đầu từ main mới nhất:
+
+git checkout main
+git pull origin main
+1. Thêm màn VPN filters
+
+git checkout -b feat/vpn-connection-filters
+2. Sửa lỗi badge status trên Dashboard
+
+git checkout -b fix/dashboard-status-badge
+3. Cập nhật tài liệu URD / README
+
+git checkout -b docs/readme-setup-guide
+# hoặc
+git checkout -b chore/update-urd-servers
+4. Refactor state toàn app
+
+git checkout -b refactor/app-state-context
+5. Hotfix billing sau khi đã lên production
+
+git checkout -b hotfix/billing-invoice-total
+Sau khi xong việc trên nhánh:
+
+git push -u origin HEAD
+# Mở PR vào main (GitHub UI hoặc: gh pr create)
+Git: viết commit
+Dùng Conventional Commits:
+
+<type>(<scope>): <mô tả ngắn>
+Type	Ý nghĩa
+feat	Thêm tính năng
+fix	Sửa lỗi
+chore	Việc bảo trì / docs / tooling
+refactor	Đổi code, không thêm feature / không fix bug
+style	Format, CSS, không đổi logic
+perf	Tối ưu hiệu năng
+test	Thêm / sửa test
+Scope (tuỳ chọn): module liên quan — auth, dashboard, servers, urd, billing, …
+
+Mô tả:
+
+Imperative, tiếng Anh, ngắn (≤ ~72 ký tự phần subject)
+Không viết hoa chữ đầu không cần thiết, không dấu chấm cuối
+Tập trung why, không liệt kê từng file
+Một commit = một ý. Tránh commit lẫn feat + refactor lớn không liên quan.
+
+Ví dụ viết commit
+Quy trình cơ bản:
+
+git status
+git add path/to/file.tsx          # hoặc: git add .
+git commit -m "feat(vpn): add connection status filter"
+Theo type:
+
+feat(auth): implement user authentication flow
+feat(vpn): add connection status filter
+feat(billing): show invoice download action
+
+fix(dashboard): correct server status badge colors
+fix(sidebar): highlight active menu item
+
+chore(urd): remove services management documentation
+docs(readme): add setup and git workflow guide
+
+refactor(store): simplify theme toggle in StateContext
+style(login): align form spacing on small screens
+perf(services): reduce re-renders in server list
+Một nhánh, nhiều commit (ví dụ feat/vpn-connection-filters):
+
+git add src/features/vpn/VpnView.tsx
+git commit -m "feat(vpn): add status filter dropdown"
+
+git add src/services/infraService.ts
+git commit -m "feat(vpn): filter connections by status in service"
+
+git add urd/06_vpn.md
+git commit -m "docs(urd): document vpn filter behavior"
+Commit có body (khi cần giải thích thêm):
+
+git commit -m "$(cat <<'EOF'
+fix(billing): correct invoice total rounding
+
+Use cents-based math so VAT lines no longer drift by 1 VND.
+EOF
+)"
+Tránh:
+
+❌ update code
+❌ fix bug
+❌ WIP
+❌ feat(vpn): Add Filter. Update VpnView.tsx and infraService.ts.
+Nên:
+
+✅ feat(vpn): add connection status filter
+✅ fix(billing): correct invoice total rounding
