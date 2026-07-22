@@ -189,6 +189,16 @@ export const recordingsApi = {
     apiRequest<import('../types').Recording>(`/api/v1/recordings/${id}/summarize`, {
       method: 'POST',
     }),
+  retranscribe: (
+    id: string,
+    body?: { language?: 'en' | 'vi'; translate?: boolean },
+  ) =>
+    apiRequest<
+      import('../types').Recording & { sttProvider?: string }
+    >(`/api/v1/recordings/${id}/transcribe`, {
+      method: 'POST',
+      body: JSON.stringify(body ?? {}),
+    }),
   uploadAudio: async (id: string, blob: Blob) => {
     const form = new FormData();
     const ext = blob.type.includes('mp4')

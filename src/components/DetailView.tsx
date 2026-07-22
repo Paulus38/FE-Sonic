@@ -20,10 +20,13 @@ import {
   BookOpen,
   Languages,
   Eye,
-  Plus
+  Plus,
+  FileAudio,
+  Loader2,
 } from 'lucide-react';
 import { Recording, DictionaryItem } from '../types';
 import { recordingsApi } from '../lib/api';
+import { useNotify } from './ui/Notify';
 import {
   ExtractedKeyword,
   buildKeywordsFromTranscript,
@@ -36,9 +39,20 @@ interface DetailViewProps {
   onBack: () => void;
   onAddWordToDictionary: (item: Omit<DictionaryItem, 'id'>) => void;
   onRegenerateSummary: (recordingId: string) => void | Promise<void>;
+  onRetranscribe: (
+    recordingId: string,
+    language?: 'en' | 'vi',
+  ) => void | Promise<void>;
 }
 
-export default function DetailView({ recording, onBack, onAddWordToDictionary, onRegenerateSummary }: DetailViewProps) {
+export default function DetailView({
+  recording,
+  onBack,
+  onAddWordToDictionary,
+  onRegenerateSummary,
+  onRetranscribe,
+}: DetailViewProps) {
+  const { confirm } = useNotify();
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const objectUrlRef = useRef<string | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -48,6 +62,7 @@ export default function DetailView({ recording, onBack, onAddWordToDictionary, o
   const [audioReady, setAudioReady] = useState(false);
   const [audioError, setAudioError] = useState('');
   const [summarizing, setSummarizing] = useState(false);
+  const [retranscribing, setRetranscribing] = useState(false);
   
   // Custom display modes for English learners
   const [showBilingual, setShowBilingual] = useState(true);
@@ -207,6 +222,34 @@ export default function DetailView({ recording, onBack, onAddWordToDictionary, o
     // Depend on recording id + transcript content signature
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [recording.id, hydratedRecording?.id, transcriptLines.map((l) => l.text).join('|')]);
+
+  const hasAudio =
+    !!(hydratedRecording?.hasAudio ?? recording.hasAudio) ||
+    !!(hydratedRecording?.audioUrl ?? recording.audioUrl);
+
+  const runRetranscribe = async (language: 'en' | 'vi') => {
+    if (retranscribing || !hasAudio) return;
+    const hasLines = transcriptLines.length > 0;
+    const langLabel = language === 'vi' ? 'tiếng Việt' : 'tiếng Anh';
+    const ok = await confirm({
+      title: 'Transcript lại từ audio?',
+      message: hasLines
+        ? `Hệ thống sẽ chạy STT ${langLabel} trên file audio đã lưu và thay toàn bộ transcript hiện tại. Thao tác này có thể mất 10–60 giây.`
+        : `Chưa có transcript. Chạy STT ${langLabel} từ file audio đã lưu để tạo nội dung mới?`,
+      confirmLabel: language === 'vi' ? 'Transcript VI' : 'Transcript EN',
+      cancelLabel: 'Hủy',
+      danger: hasLines,
+    });
+    if (!ok) return;
+    setRetranscribing(true);
+    try {
+      await onRetranscribe(recording.id, language);
+      const full = await recordingsApi.get(recording.id);
+      setHydratedRecording(full);
+    } finally {
+      setRetranscribing(false);
+    }
+  };
 
   const togglePlay = () => {
     const audio = audioRef.current;
@@ -428,6 +471,42 @@ export default function DetailView({ recording, onBack, onAddWordToDictionary, o
         }`}>
           <div className="max-w-2xl mx-auto space-y-6 md:space-y-8">
             
+            {/* Re-transcribe from stored audio (fallback when live STT failed) */}
+            <div className="flex flex-col sm:flex-row sm:items-center gap-2 p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/50">
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-extrabold text-slate-800 dark:text-slate-100 flex items-center gap-1.5">
+                  <FileAudio className="w-3.5 h-3.5 text-violet-600" />
+                  Transcript lại từ audio
+                </p>
+                <p className="text-[11px] text-slate-500 mt-0.5 leading-relaxed">
+                  {hasAudio
+                    ? 'Dùng khi realtime không nhận diện được. Sẽ thay transcript hiện tại.'
+                    : 'Bản ghi này chưa có file audio — không thể transcript lại.'}
+                </p>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  disabled={!hasAudio || retranscribing}
+                  onClick={() => void runRetranscribe('en')}
+                  className="inline-flex items-center gap-1.5 text-[10px] font-bold px-2.5 py-1.5 rounded-lg bg-violet-600 text-white disabled:opacity-50 hover:bg-violet-700"
+                >
+                  {retranscribing ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : null}
+                  {retranscribing ? 'Đang STT...' : 'EN → transcript'}
+                </button>
+                <button
+                  type="button"
+                  disabled={!hasAudio || retranscribing}
+                  onClick={() => void runRetranscribe('vi')}
+                  className="inline-flex items-center gap-1.5 text-[10px] font-bold px-2.5 py-1.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 disabled:opacity-50"
+                >
+                  VI → transcript
+                </button>
+              </div>
+            </div>
+
             {/* Context learning hint card */}
             <div className="p-3.5 bg-indigo-50/60 dark:bg-slate-800/50 rounded-xl border border-indigo-100/60 dark:border-slate-700/60 text-xs text-slate-600 dark:text-slate-400 flex items-start gap-2.5">
               <Eye className="w-4 h-4 text-blue-600 mt-0.5 shrink-0" />
@@ -496,7 +575,10 @@ export default function DetailView({ recording, onBack, onAddWordToDictionary, o
             })}
             {transcriptLines.length === 0 && (
               <div className="p-4 rounded-xl border border-dashed border-slate-300 dark:border-slate-700 text-xs text-slate-500 dark:text-slate-400">
-                Chưa có nội dung transcript cho bản ghi này. Vui lòng thử ghi âm lại hoặc kiểm tra quá trình finalize.
+                Chưa có transcript.
+                {hasAudio
+                  ? ' Bấm “EN → transcript” hoặc “VI → transcript” phía trên để chạy STT từ audio đã lưu.'
+                  : ' Bản ghi này chưa có file audio — hãy ghi lại hoặc kiểm tra upload.'}
               </div>
             )}
           </div>

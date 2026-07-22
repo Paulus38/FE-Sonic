@@ -23,6 +23,7 @@ import {
   Languages,
   HelpCircle,
 } from 'lucide-react';
+import { useNotify } from './components/ui/Notify';
 
 const emptySettings: UserSettings = {
   name: '',
@@ -73,6 +74,7 @@ function sortNewestFirst(items: Recording[]): Recording[] {
 }
 
 export default function App() {
+  const { confirm } = useNotify();
   const [token, setTokenState] = useState<string | null>(
     () => localStorage.getItem('sonic_token'),
   );
@@ -93,7 +95,6 @@ export default function App() {
     null,
   );
   const [loadError, setLoadError] = useState('');
-  const [pendingDeleteRecording, setPendingDeleteRecording] = useState<Recording | null>(null);
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [storageUsedBytes, setStorageUsedBytes] = useState(0);
   const [storageQuotaBytes, setStorageQuotaBytes] = useState(1024 * 1024 * 1024);
@@ -294,12 +295,14 @@ export default function App() {
   const handleDeleteRecording = async (id: string) => {
     const target = recordings.find((r) => r.id === id) || null;
     if (!target) return;
-    setPendingDeleteRecording(target);
-  };
-
-  const confirmDeleteRecording = async () => {
-    const target = pendingDeleteRecording;
-    if (!target) return;
+    const ok = await confirm({
+      title: 'Xóa bản ghi này?',
+      message: `Bản ghi “${target.title}” sẽ bị xóa vĩnh viễn, gồm audio và transcript trên cloud.`,
+      confirmLabel: 'Xóa',
+      cancelLabel: 'Hủy',
+      danger: true,
+    });
+    if (!ok) return;
     try {
       await recordingsApi.remove(target.id);
       setRecordings((prev) => prev.filter((r) => r.id !== target.id));
@@ -315,8 +318,6 @@ export default function App() {
         type: 'error',
         message: err instanceof Error ? err.message : 'Xóa thất bại',
       });
-    } finally {
-      setPendingDeleteRecording(null);
     }
   };
 
@@ -370,6 +371,36 @@ export default function App() {
     }
   };
 
+  const handleRetranscribe = async (
+    recordingId: string,
+    language: 'en' | 'vi' = 'en',
+  ) => {
+    try {
+      const updated = await recordingsApi.retranscribe(recordingId, {
+        language,
+        translate: language === 'en',
+      });
+      setSelectedRecording(updated);
+      setRecordings((prev) =>
+        prev.map((r) => (r.id === updated.id ? { ...r, ...updated } : r)),
+      );
+      setToast({
+        type: 'success',
+        message: updated.sttProvider
+          ? `Đã transcript lại (via ${updated.sttProvider}).`
+          : 'Đã transcript lại từ audio.',
+      });
+      void refreshAiUsage(true);
+    } catch (err) {
+      setToast({
+        type: 'error',
+        message:
+          err instanceof Error ? err.message : 'Transcript lại thất bại',
+      });
+      throw err;
+    }
+  };
+
   const handleUpdateSettings = async (next: UserSettings) => {
     const updated = await usersApi.updateSettings({
       name: next.name,
@@ -406,6 +437,7 @@ export default function App() {
             onBack={() => setCurrentTab('recordings')}
             onAddWordToDictionary={(item) => void handleAddWordToDictionary(item)}
             onRegenerateSummary={(id) => void handleRegenerateSummary(id)}
+            onRetranscribe={(id, lang) => void handleRetranscribe(id, lang)}
           />
         ) : (
           <div className="flex-1 flex items-center justify-center p-8">
@@ -553,32 +585,6 @@ export default function App() {
           />
         )}
       </main>
-      {pendingDeleteRecording && (
-        <div className="fixed inset-0 z-[70] bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-5 space-y-4">
-            <h3 className="text-sm font-extrabold text-slate-900 dark:text-white">
-              Xóa bản ghi này?
-            </h3>
-            <p className="text-xs text-slate-500 dark:text-slate-400">
-              Bản ghi <strong>{pendingDeleteRecording.title}</strong> sẽ bị xóa vĩnh viễn.
-            </p>
-            <div className="flex items-center justify-end gap-2 pt-2">
-              <button
-                onClick={() => setPendingDeleteRecording(null)}
-                className="px-4 py-2 text-xs font-bold rounded-xl border border-slate-200 dark:border-slate-700"
-              >
-                Hủy
-              </button>
-              <button
-                onClick={() => void confirmDeleteRecording()}
-                className="px-4 py-2 text-xs font-bold rounded-xl bg-rose-600 hover:bg-rose-700 text-white"
-              >
-                Xóa
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
       {toast && (
         <div
           className={`fixed top-4 left-1/2 -translate-x-1/2 z-[80] px-4 py-2.5 rounded-full text-xs font-bold text-white shadow-lg ${
