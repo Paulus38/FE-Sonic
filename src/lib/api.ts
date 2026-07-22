@@ -191,7 +191,12 @@ export const recordingsApi = {
     }),
   uploadAudio: async (id: string, blob: Blob) => {
     const form = new FormData();
-    form.append('file', blob, `recording-${id}.webm`);
+    const ext = blob.type.includes('mp4')
+      ? 'mp4'
+      : blob.type.includes('aac')
+        ? 'aac'
+        : 'webm';
+    form.append('file', blob, `recording-${id}.${ext}`);
     return apiRequest<{ audioUrl: string }>(`/api/v1/recordings/${id}/audio`, {
       method: 'POST',
       body: form,

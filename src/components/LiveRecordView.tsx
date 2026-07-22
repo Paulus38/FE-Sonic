@@ -17,6 +17,12 @@ import { UserSettings, Recording, TranscriptLine } from '../types';
 import { recordingsApi } from '../lib/api';
 import { createLiveSocket, TranscriptEvent } from '../lib/liveSocket';
 import { translateEnToVi } from '../lib/translate';
+import {
+  floatTo16kPcm,
+  int16ToBase64,
+  pickRecorderMime,
+  preferServerStt,
+} from '../lib/mobileStt';
 import { Socket } from 'socket.io-client';
 
 interface LiveRecordViewProps {
@@ -102,6 +108,9 @@ export default function LiveRecordView({
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const animationRef = useRef<number | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
+  const processorRef = useRef<ScriptProcessorNode | null>(null);
+  const sttModeRef = useRef<'browser' | 'server'>('browser');
+  const recorderMimeRef = useRef('audio/webm');
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const wantListeningRef = useRef(false);
   const pausedRef = useRef(false);
@@ -141,6 +150,12 @@ export default function LiveRecordView({
     wantListeningRef.current = false;
     if (animationRef.current) cancelAnimationFrame(animationRef.current);
     try {
+      processorRef.current?.disconnect();
+    } catch {
+      // ignore
+    }
+    processorRef.current = null;
+    try {
       recognitionRef.current?.abort();
     } catch {
       // ignore
@@ -155,6 +170,7 @@ export default function LiveRecordView({
     }
     streamRef.current?.getTracks().forEach((t) => t.stop());
     await audioContextRef.current?.close().catch(() => undefined);
+    audioContextRef.current = null;
     socketRef.current?.emit('session.stop');
     socketRef.current?.disconnect();
     socketRef.current = null;
@@ -222,7 +238,10 @@ export default function LiveRecordView({
 
     try {
       const SpeechCtor = getSpeechRecognitionCtor();
-      if (!SpeechCtor) {
+      const useServerStt = preferServerStt() || !SpeechCtor;
+      sttModeRef.current = useServerStt ? 'server' : 'browser';
+
+      if (!useServerStt && !SpeechCtor) {
         setStatusMsg(
           'Trình duyệt không hỗ trợ nhận diện realtime. Dùng Chrome/Edge.',
         );
@@ -242,7 +261,7 @@ export default function LiveRecordView({
       await new Promise<void>((resolve, reject) => {
         const timerId = setTimeout(
           () => reject(new Error('Không kết nối được live server')),
-          8000,
+          12000,
         );
         socket.on('session.ready', () => {
           clearTimeout(timerId);
@@ -251,10 +270,10 @@ export default function LiveRecordView({
             {
               recordingId: created.id,
               category,
-              mode: 'browser',
+              mode: useServerStt ? 'server' : 'browser',
               language: lang,
             },
-            (ack: { ok?: boolean; message?: string }) => {
+            (ack: { ok?: boolean; message?: string; provider?: string }) => {
               if (!ack?.ok) {
                 reject(new Error(ack?.message || 'Không start được session'));
               } else resolve();
@@ -264,23 +283,6 @@ export default function LiveRecordView({
         socket.on('connect_error', (err) => {
           clearTimeout(timerId);
           reject(err);
-        });
-      });
-
-      socket.on('transcript.translation', (ev: TranscriptEvent) => {
-        if (!ev.translation) return;
-        setLines((prev) => {
-          const next = prev.map((l) => {
-            if (l.seq !== undefined && l.seq === ev.seq) {
-              return { ...l, translation: ev.translation, seq: ev.seq };
-            }
-            if (!l.translation && l.text === ev.text) {
-              return { ...l, translation: ev.translation, seq: ev.seq };
-            }
-            return l;
-          });
-          linesRef.current = next;
-          return next;
         });
       });
 
@@ -300,6 +302,78 @@ export default function LiveRecordView({
         });
       };
 
+      const appendFinalLine = (
+        text: string,
+        seqHint?: number,
+        translation?: string,
+      ) => {
+        const cleaned = text.trim();
+        if (!cleaned) return;
+        const seq =
+          typeof seqHint === 'number' ? seqHint : localSeqRef.current++;
+        if (typeof seqHint === 'number') {
+          localSeqRef.current = Math.max(localSeqRef.current, seqHint + 1);
+        }
+        const speaker = currentSpeakerLabel();
+        const timeLabel = formatTimer(timerRef.current).substring(3);
+        setPartialText('');
+        setLines((prev) => {
+          if (prev.some((l) => l.seq === seq)) {
+            const next = prev.map((l) =>
+              l.seq === seq
+                ? { ...l, text: cleaned, translation: translation || l.translation }
+                : l,
+            );
+            linesRef.current = next;
+            return next;
+          }
+          const next = [
+            ...prev,
+            { time: timeLabel, speaker, text: cleaned, seq, translation },
+          ];
+          linesRef.current = next;
+          return next;
+        });
+        scrollToBottom();
+        if (recordLangRef.current === 'en' && !translation) {
+          void applyLocalTranslation(seq, cleaned);
+        }
+      };
+
+      socket.on('transcript.translation', (ev: TranscriptEvent) => {
+        if (!ev.translation) return;
+        setLines((prev) => {
+          const next = prev.map((l) => {
+            if (l.seq !== undefined && l.seq === ev.seq) {
+              return { ...l, translation: ev.translation, seq: ev.seq };
+            }
+            if (!l.translation && l.text === ev.text) {
+              return { ...l, translation: ev.translation, seq: ev.seq };
+            }
+            return l;
+          });
+          linesRef.current = next;
+          return next;
+        });
+      });
+
+      if (useServerStt) {
+        socket.on('transcript.partial', (ev: TranscriptEvent) => {
+          if (pausedRef.current || !ev.text?.trim()) return;
+          setPartialText(`${currentSpeakerLabel()}: ${ev.text.trim()}`);
+          scrollToBottom();
+        });
+        socket.on('transcript.final', (ev: TranscriptEvent) => {
+          if (pausedRef.current || !ev.text?.trim()) return;
+          appendFinalLine(ev.text, ev.seq, ev.translation);
+          setStatusMsg(
+            lang === 'vi'
+              ? 'Đang nghe (server STT · mobile)...'
+              : 'Đang nghe · dịch Việt (server STT · mobile)...',
+          );
+        });
+      }
+
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: settings.aiNoiseCancellation,
@@ -314,8 +388,12 @@ export default function LiveRecordView({
         (window as unknown as { webkitAudioContext: typeof AudioContext })
           .webkitAudioContext;
       const audioCtx = new AudioContextClass();
+      if (audioCtx.state === 'suspended') {
+        await audioCtx.resume();
+      }
+      const source = audioCtx.createMediaStreamSource(stream);
       const analyser = audioCtx.createAnalyser();
-      audioCtx.createMediaStreamSource(stream).connect(analyser);
+      source.connect(analyser);
       analyser.fftSize = 64;
       audioContextRef.current = audioCtx;
       const dataArray = new Uint8Array(analyser.frequencyBinCount);
@@ -332,10 +410,11 @@ export default function LiveRecordView({
       };
       tick();
 
-      const mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-        ? 'audio/webm;codecs=opus'
-        : 'audio/webm';
-      const recorder = new MediaRecorder(stream, { mimeType: mime });
+      const mime = pickRecorderMime();
+      recorderMimeRef.current = mime || 'audio/webm';
+      const recorder = mime
+        ? new MediaRecorder(stream, { mimeType: mime })
+        : new MediaRecorder(stream);
       mediaRecorderRef.current = recorder;
       chunksRef.current = [];
       recorder.ondataavailable = (e) => {
@@ -343,96 +422,112 @@ export default function LiveRecordView({
       };
       recorder.start(1000);
 
-      const recognition = new SpeechCtor();
-      recognition.continuous = true;
-      recognition.interimResults = true;
-      recognition.maxAlternatives = 1;
-      recognition.lang = lang === 'vi' ? 'vi-VN' : 'en-US';
-      recognitionRef.current = recognition;
+      if (useServerStt) {
+        // Mobile: stream PCM → Deepgram/Gemini (Web Speech conflicts with MediaRecorder).
+        const processor = audioCtx.createScriptProcessor(4096, 1, 1);
+        processorRef.current = processor;
+        const silent = audioCtx.createGain();
+        silent.gain.value = 0;
+        source.connect(processor);
+        processor.connect(silent);
+        silent.connect(audioCtx.destination);
 
-      recognition.onresult = (event) => {
-        if (pausedRef.current) return;
-        let interim = '';
-        let finalChunk = '';
-
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-          const result = event.results[i];
-          const text = result[0].transcript.trim();
-          if (!text) continue;
-          if (result.isFinal) finalChunk += (finalChunk ? ' ' : '') + text;
-          else interim += text;
-        }
-
-        const speaker = currentSpeakerLabel();
-
-        if (interim) {
-          setPartialText(`${speaker}: ${interim}`);
-          scrollToBottom();
-        }
-
-        if (finalChunk) {
-          setPartialText('');
-          const seq = localSeqRef.current++;
-          const timeLabel = formatTimer(timerRef.current).substring(3);
-          setLines((prev) => {
-            const next = [
-              ...prev,
-              {
-                time: timeLabel,
-                speaker,
-                text: finalChunk,
-                seq,
-              },
-            ];
-            linesRef.current = next;
-            return next;
+        processor.onaudioprocess = (ev) => {
+          if (pausedRef.current || !wantListeningRef.current) return;
+          const input = ev.inputBuffer.getChannelData(0);
+          const pcm = floatTo16kPcm(input, audioCtx.sampleRate);
+          if (pcm.length === 0) return;
+          socket.emit('audio.chunk', {
+            data: int16ToBase64(pcm),
+            mimeType: 'audio/l16;rate=16000',
           });
-          scrollToBottom();
-          socket.emit('transcript.utterance', {
-            text: finalChunk,
-            isFinal: true,
-            speaker,
-            seq,
-          });
-          if (recordLangRef.current === 'en') {
-            void applyLocalTranslation(seq, finalChunk);
-            setStatusMsg('Đang nghe · dịch Việt...');
-          } else {
-            setStatusMsg('Đang nghe tiếng Việt...');
-          }
-        }
-      };
+        };
+      } else if (SpeechCtor) {
+        const recognition = new SpeechCtor();
+        // continuous=false + restart is more stable on some tablets
+        recognition.continuous = true;
+        recognition.interimResults = true;
+        recognition.maxAlternatives = 1;
+        recognition.lang = lang === 'vi' ? 'vi-VN' : 'en-US';
+        recognitionRef.current = recognition;
 
-      recognition.onerror = (event) => {
-        if (event.error === 'no-speech' || event.error === 'aborted') return;
-        if (event.error === 'not-allowed') {
-          setStatusMsg('Chưa cấp quyền microphone');
-          wantListeningRef.current = false;
-          return;
-        }
-        setStatusMsg(`Lỗi nhận diện: ${event.error}`);
-      };
+        recognition.onresult = (event) => {
+          if (pausedRef.current) return;
+          let interim = '';
+          let finalChunk = '';
 
-      recognition.onend = () => {
-        if (wantListeningRef.current && !pausedRef.current) {
-          try {
-            recognition.start();
-          } catch {
-            // already started
+          for (let i = event.resultIndex; i < event.results.length; i++) {
+            const result = event.results[i];
+            const text = result[0].transcript.trim();
+            if (!text) continue;
+            if (result.isFinal) finalChunk += (finalChunk ? ' ' : '') + text;
+            else interim += text;
           }
-        }
-      };
+
+          const speaker = currentSpeakerLabel();
+
+          if (interim) {
+            setPartialText(`${speaker}: ${interim}`);
+            scrollToBottom();
+          }
+
+          if (finalChunk) {
+            const seq = localSeqRef.current++;
+            appendFinalLine(finalChunk, seq);
+            socket.emit('transcript.utterance', {
+              text: finalChunk,
+              isFinal: true,
+              speaker,
+              seq,
+            });
+            setStatusMsg(
+              recordLangRef.current === 'en'
+                ? 'Đang nghe · dịch Việt...'
+                : 'Đang nghe tiếng Việt...',
+            );
+          }
+        };
+
+        recognition.onerror = (event) => {
+          if (event.error === 'no-speech' || event.error === 'aborted') return;
+          if (event.error === 'not-allowed') {
+            setStatusMsg('Chưa cấp quyền microphone');
+            wantListeningRef.current = false;
+            return;
+          }
+          setStatusMsg(`Lỗi nhận diện: ${event.error}`);
+        };
+
+        recognition.onend = () => {
+          if (wantListeningRef.current && !pausedRef.current) {
+            try {
+              recognition.start();
+            } catch {
+              // already started
+            }
+          }
+        };
+
+        recognition.start();
+      }
 
       wantListeningRef.current = true;
       pausedRef.current = false;
       setIsPaused(false);
-      recognition.start();
       setIsRecording(true);
-      setStatusMsg(
-        lang === 'vi'
-          ? 'Đang ghi tiếng Việt — nói đi, chữ hiện ngay'
-          : 'Đang ghi tiếng Anh — chữ Anh + dịch Việt',
-      );
+      if (useServerStt) {
+        setStatusMsg(
+          lang === 'vi'
+            ? 'Điện thoại: đang ghi + STT server — nói đi'
+            : 'Điện thoại: đang ghi + STT server — chữ Anh + dịch Việt',
+        );
+      } else {
+        setStatusMsg(
+          lang === 'vi'
+            ? 'Đang ghi tiếng Việt — nói đi, chữ hiện ngay'
+            : 'Đang ghi tiếng Anh — chữ Anh + dịch Việt',
+        );
+      }
     } catch (err) {
       setStatusMsg(
         err instanceof Error
@@ -451,10 +546,12 @@ export default function LiveRecordView({
     setIsPaused(next);
     pausedRef.current = next;
     if (next) {
-      try {
-        recognitionRef.current?.stop();
-      } catch {
-        // ignore
+      if (sttModeRef.current === 'browser') {
+        try {
+          recognitionRef.current?.stop();
+        } catch {
+          // ignore
+        }
       }
       mediaRecorderRef.current?.pause();
       socketRef.current?.emit('session.pause');
@@ -462,12 +559,18 @@ export default function LiveRecordView({
     } else {
       mediaRecorderRef.current?.resume();
       socketRef.current?.emit('session.resume');
-      try {
-        recognitionRef.current?.start();
-      } catch {
-        // ignore
+      if (sttModeRef.current === 'browser') {
+        try {
+          recognitionRef.current?.start();
+        } catch {
+          // ignore
+        }
       }
-      setStatusMsg('Đang nghe realtime...');
+      setStatusMsg(
+        sttModeRef.current === 'server'
+          ? 'Đang nghe (server STT)...'
+          : 'Đang nghe realtime...',
+      );
     }
   };
 
@@ -498,7 +601,9 @@ export default function LiveRecordView({
       }
       socketRef.current?.emit('session.stop');
 
-      const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
+      const blob = new Blob(chunksRef.current, {
+        type: recorderMimeRef.current || 'audio/webm',
+      });
       if (blob.size === 0) {
         throw new Error('Không có dữ liệu âm thanh để upload lên Firebase');
       }
@@ -529,10 +634,12 @@ export default function LiveRecordView({
       setStatusMsg(err instanceof Error ? err.message : 'Lưu thất bại');
       setSaving(false);
       wantListeningRef.current = true;
-      try {
-        recognitionRef.current?.start();
-      } catch {
-        // ignore
+      if (sttModeRef.current === 'browser') {
+        try {
+          recognitionRef.current?.start();
+        } catch {
+          // ignore
+        }
       }
     }
   };

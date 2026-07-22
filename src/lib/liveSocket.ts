@@ -14,10 +14,11 @@ export type TranscriptEvent = {
 export function createLiveSocket(token: string): Socket {
   return io(`${getApiBase()}/live`, {
     auth: { token },
-    transports: ['websocket'],
+    // polling fallback helps some mobile networks / proxies
+    transports: ['websocket', 'polling'],
     autoConnect: true,
     reconnection: true,
-    reconnectionAttempts: 5,
+    reconnectionAttempts: 8,
   });
 }
 
