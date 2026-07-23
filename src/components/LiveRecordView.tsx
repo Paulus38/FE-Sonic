@@ -413,10 +413,9 @@ export default function LiveRecordView({
 
       const mime = pickRecorderMime();
       recorderMimeRef.current = mime || 'audio/webm';
-      // Voice bitrate ~48kbps: ~1 giờ ≈ 20–25MB (Blob client upload chịu được).
-      // Default browser bitrate often 128kbps+ → 3 phút đã >4.5MB và vỡ đường Nest cũ.
+      // ~32kbps đủ cho giọng nói → 1 giờ ≈ 14MB; Hobby Blob 1GB ≈ nhiều giờ demo
       const recorderOpts: MediaRecorderOptions = {
-        audioBitsPerSecond: 48_000,
+        audioBitsPerSecond: 32_000,
       };
       if (mime) recorderOpts.mimeType = mime;
       let recorder: MediaRecorder;

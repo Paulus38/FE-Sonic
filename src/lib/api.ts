@@ -220,8 +220,8 @@ export const recordingsApi = {
     }),
   /**
    * Upload audio sau khi dừng ghi (LiveRecordView.handleSave).
-   * Prefer: upload-info → Blob client-upload → confirm (file lớn).
-   * Fallback: POST multipart /:id/audio (dev / không Blob / file <~4MB).
+   * Vercel Blob client-upload (multipart) — không qua Nest ~4.5MB → họp dài OK.
+   * R2 nếu sau này bật; fallback multipart nhỏ.
    */
   uploadAudio: async (
     id: string,
@@ -231,22 +231,64 @@ export const recordingsApi = {
     const mime = blob.type || 'audio/webm';
     const sizeMb = blob.size / (1024 * 1024);
     const info = await apiRequest<{
+      provider?: 'r2' | 'vercel-blob' | 'none';
       clientUpload: boolean;
-      access: 'public' | 'private';
+      access?: 'public' | 'private';
       pathname: string;
+      uploadUrl?: string;
+      contentType?: string;
       maxBytes: number;
     }>(
       `/api/v1/recordings/${id}/audio/upload-info?mime=${encodeURIComponent(mime)}`,
     );
 
-    // Browser → Vercel Blob trực tiếp (không qua body Nest ~4.5MB).
-    // Luôn multipart để cuộc họp / phỏng vấn dài (chục phút–1 giờ) ổn định.
-    if (info.clientUpload) {
+    const provider =
+      info.provider ||
+      (info.uploadUrl ? 'r2' : info.clientUpload ? 'vercel-blob' : 'none');
+
+    // 1) Cloudflare R2 (optional)
+    if (provider === 'r2' && info.uploadUrl) {
+      try {
+        onProgress?.(5);
+        const putRes = await fetch(info.uploadUrl, {
+          method: 'PUT',
+          body: blob,
+          headers: { 'Content-Type': info.contentType || mime },
+        });
+        if (!putRes.ok) {
+          const errText = await putRes.text().catch(() => '');
+          throw new Error(
+            `R2 PUT ${putRes.status}: ${errText.slice(0, 200) || putRes.statusText}`,
+          );
+        }
+        onProgress?.(95);
+        return apiRequest<{ audioUrl: string }>(
+          `/api/v1/recordings/${id}/audio/confirm`,
+          {
+            method: 'POST',
+            body: JSON.stringify({
+              provider: 'r2',
+              key: info.pathname,
+              contentType: mime,
+              size: blob.size,
+            }),
+          },
+        );
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err);
+        throw new Error(
+          `Upload R2 thất bại (${sizeMb.toFixed(1)} MB). ${detail}`,
+        );
+      }
+    }
+
+    // 2) Vercel Blob — đường chính cho họp dài (free Hobby ~1GB)
+    if (provider === 'vercel-blob' && info.clientUpload) {
       try {
         const { upload } = await import('@vercel/blob/client');
         const token = getToken();
         const result = await upload(info.pathname, blob, {
-          access: info.access,
+          access: info.access || 'public',
           handleUploadUrl: `${API_BASE}/api/v1/recordings/${id}/audio/client-upload`,
           contentType: mime,
           multipart: true,
@@ -262,6 +304,7 @@ export const recordingsApi = {
           {
             method: 'POST',
             body: JSON.stringify({
+              provider: 'vercel-blob',
               url: result.url,
               contentType: result.contentType || mime,
               size: blob.size,
@@ -271,15 +314,15 @@ export const recordingsApi = {
       } catch (err) {
         const detail = err instanceof Error ? err.message : String(err);
         throw new Error(
-          `Upload audio thất bại (${sizeMb.toFixed(1)} MB). ${detail}`,
+          `Upload Blob thất bại (${sizeMb.toFixed(1)} MB). ${detail}`,
         );
       }
     }
 
-    // Fallback chỉ khi chưa cấu hình Blob — Nest/Vercel chỉ chịu ~4MB
+    // 3) Fallback multipart qua Nest (chỉ file nhỏ <~4MB trên Vercel)
     if (blob.size > 4 * 1024 * 1024) {
       throw new Error(
-        `File ${sizeMb.toFixed(1)} MB quá lớn cho upload qua server. Cần BLOB_READ_WRITE_TOKEN (client → Vercel Blob) để lưu cuộc họp dài.`,
+        `File ${sizeMb.toFixed(1)} MB quá lớn cho upload qua server. Cần client → Vercel Blob (đã cấu hình BLOB_READ_WRITE_TOKEN).`,
       );
     }
     const form = new FormData();
