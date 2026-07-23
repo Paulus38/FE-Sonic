@@ -44,6 +44,11 @@ export function int16ToBase64(pcm: Int16Array): string {
   return btoa(binary);
 }
 
+/** Strip `;codecs=...` so upload Content-Type matches BE allowlist. */
+export function baseMimeType(mime: string): string {
+  return (mime || '').split(';')[0].trim().toLowerCase() || 'audio/webm';
+}
+
 export function pickRecorderMime(): string {
   if (typeof MediaRecorder === 'undefined') return '';
   if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {

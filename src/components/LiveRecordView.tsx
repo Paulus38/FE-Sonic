@@ -20,6 +20,7 @@ import { translateEnToVi } from '../lib/translate';
 import {
   floatTo16kPcm,
   int16ToBase64,
+  baseMimeType,
   pickRecorderMime,
   preferServerStt,
 } from '../lib/mobileStt';
@@ -602,7 +603,7 @@ export default function LiveRecordView({
       socketRef.current?.emit('session.stop');
 
       const blob = new Blob(chunksRef.current, {
-        type: recorderMimeRef.current || 'audio/webm',
+        type: baseMimeType(recorderMimeRef.current || 'audio/webm'),
       });
       if (blob.size === 0) {
         throw new Error('Không có dữ liệu âm thanh để upload lên Firebase');
