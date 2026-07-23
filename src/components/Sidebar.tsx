@@ -11,6 +11,7 @@ import {
   Settings,
   Zap,
   Shield,
+  ScrollText,
 } from 'lucide-react';
 
 function formatBytes(bytes: number): string {
@@ -61,7 +62,15 @@ export default function Sidebar({
     { id: 'ai_usage', label: 'AI Tokens', labelEng: 'Usage', icon: Zap },
     { id: 'analytics', label: 'Phân tích', labelEng: 'Analytics', icon: BarChart3 },
     ...(isAdmin
-      ? [{ id: 'admin', label: 'Quản trị', labelEng: 'RBAC', icon: Shield }]
+      ? [
+          { id: 'admin', label: 'Quản trị', labelEng: 'RBAC', icon: Shield },
+          {
+            id: 'admin_logs',
+            label: 'Nhật ký',
+            labelEng: 'Audit',
+            icon: ScrollText,
+          },
+        ]
       : []),
   ];
 

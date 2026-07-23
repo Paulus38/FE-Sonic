@@ -9,6 +9,7 @@ import DictionaryView from './components/DictionaryView';
 import AuthView from './components/AuthView';
 import AiUsageView from './components/AiUsageView';
 import AdminUsersView from './components/AdminUsersView';
+import AdminLogsView from './components/AdminLogsView';
 import DashboardView from './components/DashboardView';
 import AnalyticsView from './components/AnalyticsView';
 import { Recording, UserSettings, DictionaryItem } from './types';
@@ -489,6 +490,16 @@ export default function App() {
           <div className="flex-1 flex items-center justify-center p-8">
             <p className="text-sm text-rose-600 font-semibold">
               Chỉ admin mới truy cập được màn RBAC.
+            </p>
+          </div>
+        );
+      case 'admin_logs':
+        return settings.role === 'admin' ? (
+          <AdminLogsView />
+        ) : (
+          <div className="flex-1 flex items-center justify-center p-8">
+            <p className="text-sm text-rose-600 font-semibold">
+              Chỉ admin mới xem được nhật ký hệ thống.
             </p>
           </div>
         );

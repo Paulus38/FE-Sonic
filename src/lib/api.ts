@@ -153,6 +153,16 @@ export const adminApi = {
     ),
   deleteUser: (id: string) =>
     apiRequest<void>(`/api/v1/admin/users/${id}`, { method: 'DELETE' }),
+  listLogs: (params?: { limit?: number; action?: string; userId?: string }) => {
+    const q = new URLSearchParams();
+    if (params?.limit) q.set('limit', String(params.limit));
+    if (params?.action) q.set('action', params.action);
+    if (params?.userId) q.set('userId', params.userId);
+    const qs = q.toString();
+    return apiRequest<{ items: import('../types').AuditLogEntry[] }>(
+      `/api/v1/admin/logs${qs ? `?${qs}` : ''}`,
+    );
+  },
 };
 
 export const recordingsApi = {

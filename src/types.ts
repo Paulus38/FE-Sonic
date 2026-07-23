@@ -76,3 +76,17 @@ export type AiUsageEvent = {
   totalTokens: number;
   createdAt: string;
 };
+
+export type AuditLogEntry = {
+  id: string;
+  userId: string | null;
+  userEmail: string | null;
+  action: string;
+  resource: string;
+  resourceId: string | null;
+  status: 'ok' | 'error' | string;
+  message: string | null;
+  meta: Record<string, unknown> | null;
+  ip: string | null;
+  createdAt: string;
+};
