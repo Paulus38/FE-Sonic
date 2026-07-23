@@ -166,18 +166,25 @@ export const adminApi = {
 };
 
 export const recordingsApi = {
+  /** GET /api/v1/recordings — thư viện (App) */
   list: (page = 1, limit = 50) =>
     apiRequest<{
       items: import('../types').Recording[];
       meta: { page: number; limit: number; total: number };
     }>(`/api/v1/recordings?page=${page}&limit=${limit}`),
+  /** GET /api/v1/recordings/:id — chi tiết + transcript */
   get: (id: string) =>
     apiRequest<import('../types').Recording>(`/api/v1/recordings/${id}`),
+  /** POST /api/v1/recordings — tạo draft lúc Bắt đầu ghi */
   create: (body: { title: string; category?: string }) =>
     apiRequest<import('../types').Recording>('/api/v1/recordings', {
       method: 'POST',
       body: JSON.stringify(body),
     }),
+  /**
+   * POST /:id/finalize — lưu title/duration/transcript → READY.
+   * Chỉ gọi sau uploadAudio OK (BE từ chối nếu chưa có audio).
+   */
   finalize: (
     id: string,
     body: {
@@ -195,10 +202,12 @@ export const recordingsApi = {
         body: JSON.stringify(body),
       },
     ),
+  /** POST /:id/summarize — Gemini tóm tắt on-demand (Detail) */
   summarize: (id: string) =>
     apiRequest<import('../types').Recording>(`/api/v1/recordings/${id}/summarize`, {
       method: 'POST',
     }),
+  /** POST /:id/transcribe — STT lại từ file đã lưu */
   retranscribe: (
     id: string,
     body?: { language?: 'en' | 'vi'; translate?: boolean },
@@ -209,11 +218,74 @@ export const recordingsApi = {
       method: 'POST',
       body: JSON.stringify(body ?? {}),
     }),
-  uploadAudio: async (id: string, blob: Blob) => {
+  /**
+   * Upload audio sau khi dừng ghi (LiveRecordView.handleSave).
+   * Prefer: upload-info → Blob client-upload → confirm (file lớn).
+   * Fallback: POST multipart /:id/audio (dev / không Blob / file <~4MB).
+   */
+  uploadAudio: async (
+    id: string,
+    blob: Blob,
+    onProgress?: (pct: number) => void,
+  ) => {
+    const mime = blob.type || 'audio/webm';
+    const sizeMb = blob.size / (1024 * 1024);
+    const info = await apiRequest<{
+      clientUpload: boolean;
+      access: 'public' | 'private';
+      pathname: string;
+      maxBytes: number;
+    }>(
+      `/api/v1/recordings/${id}/audio/upload-info?mime=${encodeURIComponent(mime)}`,
+    );
+
+    // Browser → Vercel Blob trực tiếp (không qua body Nest ~4.5MB).
+    // Luôn multipart để cuộc họp / phỏng vấn dài (chục phút–1 giờ) ổn định.
+    if (info.clientUpload) {
+      try {
+        const { upload } = await import('@vercel/blob/client');
+        const token = getToken();
+        const result = await upload(info.pathname, blob, {
+          access: info.access,
+          handleUploadUrl: `${API_BASE}/api/v1/recordings/${id}/audio/client-upload`,
+          contentType: mime,
+          multipart: true,
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+          onUploadProgress: (e) => {
+            if (onProgress && e.total > 0) {
+              onProgress(Math.round((e.loaded / e.total) * 100));
+            }
+          },
+        });
+        return apiRequest<{ audioUrl: string }>(
+          `/api/v1/recordings/${id}/audio/confirm`,
+          {
+            method: 'POST',
+            body: JSON.stringify({
+              url: result.url,
+              contentType: result.contentType || mime,
+              size: blob.size,
+            }),
+          },
+        );
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err);
+        throw new Error(
+          `Upload audio thất bại (${sizeMb.toFixed(1)} MB). ${detail}`,
+        );
+      }
+    }
+
+    // Fallback chỉ khi chưa cấu hình Blob — Nest/Vercel chỉ chịu ~4MB
+    if (blob.size > 4 * 1024 * 1024) {
+      throw new Error(
+        `File ${sizeMb.toFixed(1)} MB quá lớn cho upload qua server. Cần BLOB_READ_WRITE_TOKEN (client → Vercel Blob) để lưu cuộc họp dài.`,
+      );
+    }
     const form = new FormData();
-    const ext = blob.type.includes('mp4')
+    const ext = mime.includes('mp4')
       ? 'mp4'
-      : blob.type.includes('aac')
+      : mime.includes('aac')
         ? 'aac'
         : 'webm';
     form.append('file', blob, `recording-${id}.${ext}`);
@@ -222,6 +294,7 @@ export const recordingsApi = {
       body: form,
     });
   },
+  /** GET /:id/audio → blob URL để <audio> phát lại */
   fetchAudioObjectUrl: async (id: string) => {
     const token = localStorage.getItem('sonic_token');
     const base =
@@ -236,6 +309,7 @@ export const recordingsApi = {
     const blob = await res.blob();
     return URL.createObjectURL(blob);
   },
+  /** DELETE /:id — hủy phiên / xóa thư viện */
   remove: (id: string) =>
     apiRequest<void>(`/api/v1/recordings/${id}`, { method: 'DELETE' }),
 };

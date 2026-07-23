@@ -56,12 +56,9 @@ function mapMeToSettings(
 }
 
 function filterLibraryItems(items: Recording[]): Recording[] {
+  // Only show finalized recordings — drafts without successful audio stay hidden
   return items.filter(
-    (r) =>
-      !r.status ||
-      r.status === 'ready' ||
-      r.status === 'processing' ||
-      r.status === 'recording',
+    (r) => !r.status || r.status === 'ready' || r.status === 'processing',
   );
 }
 

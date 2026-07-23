@@ -413,9 +413,20 @@ export default function LiveRecordView({
 
       const mime = pickRecorderMime();
       recorderMimeRef.current = mime || 'audio/webm';
-      const recorder = mime
-        ? new MediaRecorder(stream, { mimeType: mime })
-        : new MediaRecorder(stream);
+      // Voice bitrate ~48kbps: ~1 giờ ≈ 20–25MB (Blob client upload chịu được).
+      // Default browser bitrate often 128kbps+ → 3 phút đã >4.5MB và vỡ đường Nest cũ.
+      const recorderOpts: MediaRecorderOptions = {
+        audioBitsPerSecond: 48_000,
+      };
+      if (mime) recorderOpts.mimeType = mime;
+      let recorder: MediaRecorder;
+      try {
+        recorder = new MediaRecorder(stream, recorderOpts);
+      } catch {
+        recorder = mime
+          ? new MediaRecorder(stream, { mimeType: mime })
+          : new MediaRecorder(stream);
+      }
       mediaRecorderRef.current = recorder;
       chunksRef.current = [];
       recorder.ondataavailable = (e) => {
@@ -445,8 +456,8 @@ export default function LiveRecordView({
         };
       } else if (SpeechCtor) {
         const recognition = new SpeechCtor();
-        // continuous=false + restart is more stable on some tablets
-        recognition.continuous = true;
+        // Vietnamese is more stable with continuous=false + restart on end
+        recognition.continuous = lang !== 'vi';
         recognition.interimResults = true;
         recognition.maxAlternatives = 1;
         recognition.lang = lang === 'vi' ? 'vi-VN' : 'en-US';
@@ -496,17 +507,31 @@ export default function LiveRecordView({
             wantListeningRef.current = false;
             return;
           }
+          if (event.error === 'network') {
+            setStatusMsg('STT mạng lỗi — đang thử lại...');
+            return;
+          }
+          if (event.error === 'language-not-supported') {
+            setStatusMsg(
+              'Trình duyệt không hỗ trợ STT tiếng Việt — thử Chrome hoặc chế độ mobile (server STT)',
+            );
+            wantListeningRef.current = false;
+            return;
+          }
           setStatusMsg(`Lỗi nhận diện: ${event.error}`);
         };
 
         recognition.onend = () => {
-          if (wantListeningRef.current && !pausedRef.current) {
+          if (!wantListeningRef.current || pausedRef.current) return;
+          // Short delay avoids "already started" races, esp. for vi-VN
+          window.setTimeout(() => {
+            if (!wantListeningRef.current || pausedRef.current) return;
             try {
               recognition.start();
             } catch {
               // already started
             }
-          }
+          }, lang === 'vi' ? 250 : 50);
         };
 
         recognition.start();
@@ -578,8 +603,9 @@ export default function LiveRecordView({
   const handleSave = async () => {
     if (!recordingId || saving || !isRecording) return;
     setSaving(true);
-    setStatusMsg('Đang lưu bản ghi lên Firebase...');
+    setStatusMsg('Đang lưu bản ghi...');
     wantListeningRef.current = false;
+    const idToSave = recordingId;
     try {
       try {
         recognitionRef.current?.stop();
@@ -606,13 +632,16 @@ export default function LiveRecordView({
         type: baseMimeType(recorderMimeRef.current || 'audio/webm'),
       });
       if (blob.size === 0) {
-        throw new Error('Không có dữ liệu âm thanh để upload lên Firebase');
+        throw new Error('Không có dữ liệu âm thanh để upload');
       }
-      setStatusMsg('Đang upload audio lên Firebase Storage...');
-      await recordingsApi.uploadAudio(recordingId, blob);
+      const sizeMb = (blob.size / (1024 * 1024)).toFixed(1);
+      setStatusMsg(`Đang upload audio (${sizeMb} MB) lên cloud...`);
+      await recordingsApi.uploadAudio(idToSave, blob, (pct) => {
+        setStatusMsg(`Đang upload audio... ${pct}%`);
+      });
 
-      setStatusMsg('Đang lưu transcript lên Firestore...');
-      const saved = await recordingsApi.finalize(recordingId, {
+      setStatusMsg('Audio OK — đang lưu transcript lên Firestore...');
+      const saved = await recordingsApi.finalize(idToSave, {
         title:
           title || `${category} - ${new Date().toLocaleDateString('vi-VN')}`,
         category,
@@ -625,15 +654,18 @@ export default function LiveRecordView({
             translation,
           }),
         ),
-        // Don't auto-call Gemini on save — user triggers summary from Detail view.
         generateSummary: false,
       });
 
       await cleanup();
       onSaveRecording(saved);
     } catch (err) {
-      setStatusMsg(err instanceof Error ? err.message : 'Lưu thất bại');
+      const msg = err instanceof Error ? err.message : 'Lưu thất bại';
+      setStatusMsg(
+        `${msg} — transcript chưa ghi DB (cần audio thành công trước).`,
+      );
       setSaving(false);
+      // Keep draft recordingId for retry; do not finalize without audio.
       wantListeningRef.current = true;
       if (sttModeRef.current === 'browser') {
         try {
