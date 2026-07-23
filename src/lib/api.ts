@@ -304,7 +304,6 @@ export const recordingsApi = {
           {
             method: 'POST',
             body: JSON.stringify({
-              provider: 'vercel-blob',
               url: result.url,
               contentType: result.contentType || mime,
               size: blob.size,
