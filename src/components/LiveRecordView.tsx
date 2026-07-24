@@ -12,6 +12,8 @@ import {
   Check,
   User,
   Users,
+  ChevronDown,
+  Settings2,
 } from 'lucide-react';
 import { UserSettings, Recording, TranscriptLine } from '../types';
 import { recordingsApi } from '../lib/api';
@@ -24,6 +26,14 @@ import {
   pickRecorderMime,
   preferServerStt,
 } from '../lib/mobileStt';
+import {
+  localizeSpeakerLabel,
+  speakerStyleFor,
+} from '../lib/speakers';
+import {
+  estimateApiMsFromDuration,
+  useJobProgress,
+} from './ui/JobProgress';
 import { Socket } from 'socket.io-client';
 
 interface LiveRecordViewProps {
@@ -34,7 +44,6 @@ interface LiveRecordViewProps {
 }
 
 type TalkMode = 'solo' | 'conversation';
-type ActiveSpeaker = 'me' | 'other';
 type RecordLang = 'en' | 'vi';
 
 type LiveLine = TranscriptLine & { seq?: number };
@@ -76,6 +85,7 @@ export default function LiveRecordView({
   onSaveRecording,
   onCancel,
 }: LiveRecordViewProps) {
+  const { startJob, updateJob, completeJob, failJob } = useJobProgress();
   const [isRecording, setIsRecording] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [timer, setTimer] = useState(0);
@@ -88,7 +98,6 @@ export default function LiveRecordView({
   const [titleManual, setTitleManual] = useState(false);
   const [recordLang, setRecordLang] = useState<RecordLang>('en');
   const [talkMode, setTalkMode] = useState<TalkMode>('solo');
-  const [activeSpeaker, setActiveSpeaker] = useState<ActiveSpeaker>('me');
   const [lines, setLines] = useState<LiveLine[]>([]);
   const [partialText, setPartialText] = useState('');
   const [recordingId, setRecordingId] = useState<string | null>(null);
@@ -98,6 +107,8 @@ export default function LiveRecordView({
   );
   const [saving, setSaving] = useState(false);
   const [starting, setStarting] = useState(false);
+  const [sttMode, setSttMode] = useState<'browser' | 'server'>('browser');
+  const [settingsOpen, setSettingsOpen] = useState(true);
   const [barsState, setBarsState] = useState<number[]>(
     Array.from({ length: 40 }, () => 20),
   );
@@ -117,17 +128,22 @@ export default function LiveRecordView({
   const pausedRef = useRef(false);
   const linesRef = useRef<LiveLine[]>([]);
   const talkModeRef = useRef<TalkMode>('solo');
-  const activeSpeakerRef = useRef<ActiveSpeaker>('me');
   const recordLangRef = useRef<RecordLang>('en');
   const timerRef = useRef(0);
   const localSeqRef = useRef(0);
 
   const meLabel = settings.name?.trim() || 'Bạn';
-  const otherLabel = 'Đối phương';
+  /** Server STT + hội thoại → Deepgram tự tách người nói */
+  const autoDiarize = talkMode === 'conversation' && sttMode === 'server';
 
   const currentSpeakerLabel = () => {
     if (talkModeRef.current === 'solo') return meLabel;
-    return activeSpeakerRef.current === 'me' ? meLabel : otherLabel;
+    return 'Người nói';
+  };
+
+  const resolveSpeaker = (fromServer?: string | null) => {
+    if (fromServer?.trim()) return localizeSpeakerLabel(fromServer);
+    return currentSpeakerLabel();
   };
 
   const formatTimer = (seconds: number) => {
@@ -185,15 +201,7 @@ export default function LiveRecordView({
 
   useEffect(() => {
     talkModeRef.current = talkMode;
-    if (talkMode === 'solo') {
-      setActiveSpeaker('me');
-      activeSpeakerRef.current = 'me';
-    }
   }, [talkMode]);
-
-  useEffect(() => {
-    activeSpeakerRef.current = activeSpeaker;
-  }, [activeSpeaker]);
 
   useEffect(() => {
     recordLangRef.current = recordLang;
@@ -239,8 +247,13 @@ export default function LiveRecordView({
 
     try {
       const SpeechCtor = getSpeechRecognitionCtor();
-      const useServerStt = preferServerStt() || !SpeechCtor;
+      // Hội thoại cần server STT (Deepgram diarize) để tách người nói tự động.
+      const useServerStt =
+        talkModeRef.current === 'conversation' ||
+        preferServerStt() ||
+        !SpeechCtor;
       sttModeRef.current = useServerStt ? 'server' : 'browser';
+      setSttMode(sttModeRef.current);
 
       if (!useServerStt && !SpeechCtor) {
         setStatusMsg(
@@ -307,6 +320,7 @@ export default function LiveRecordView({
         text: string,
         seqHint?: number,
         translation?: string,
+        speakerFromServer?: string,
       ) => {
         const cleaned = text.trim();
         if (!cleaned) return;
@@ -315,14 +329,19 @@ export default function LiveRecordView({
         if (typeof seqHint === 'number') {
           localSeqRef.current = Math.max(localSeqRef.current, seqHint + 1);
         }
-        const speaker = currentSpeakerLabel();
+        const speaker = resolveSpeaker(speakerFromServer);
         const timeLabel = formatTimer(timerRef.current).substring(3);
         setPartialText('');
         setLines((prev) => {
           if (prev.some((l) => l.seq === seq)) {
             const next = prev.map((l) =>
               l.seq === seq
-                ? { ...l, text: cleaned, translation: translation || l.translation }
+                ? {
+                    ...l,
+                    text: cleaned,
+                    speaker,
+                    translation: translation || l.translation,
+                  }
                 : l,
             );
             linesRef.current = next;
@@ -361,16 +380,21 @@ export default function LiveRecordView({
       if (useServerStt) {
         socket.on('transcript.partial', (ev: TranscriptEvent) => {
           if (pausedRef.current || !ev.text?.trim()) return;
-          setPartialText(`${currentSpeakerLabel()}: ${ev.text.trim()}`);
+          const who = resolveSpeaker(ev.speaker);
+          setPartialText(`${who}: ${ev.text.trim()}`);
           scrollToBottom();
         });
         socket.on('transcript.final', (ev: TranscriptEvent) => {
           if (pausedRef.current || !ev.text?.trim()) return;
-          appendFinalLine(ev.text, ev.seq, ev.translation);
+          appendFinalLine(ev.text, ev.seq, ev.translation, ev.speaker);
           setStatusMsg(
-            lang === 'vi'
-              ? 'Đang nghe (server STT · mobile)...'
-              : 'Đang nghe · dịch Việt (server STT · mobile)...',
+            talkModeRef.current === 'conversation'
+              ? lang === 'vi'
+                ? 'Đang nghe · tự nhận diện người nói...'
+                : 'Đang nghe · dịch Việt · tự nhận diện người nói...'
+              : lang === 'vi'
+                ? 'Đang nghe (server STT)...'
+                : 'Đang nghe · dịch Việt (server STT)...',
           );
         });
       }
@@ -599,12 +623,23 @@ export default function LiveRecordView({
     }
   };
 
+  useEffect(() => {
+    // Khi đang ghi: thu gọn settings để nhường chỗ transcript
+    if (isRecording) setSettingsOpen(false);
+  }, [isRecording]);
+
   const handleSave = async () => {
     if (!recordingId || saving || !isRecording) return;
     setSaving(true);
     setStatusMsg('Đang lưu bản ghi...');
     wantListeningRef.current = false;
     const idToSave = recordingId;
+    const uploadJobId = startJob('Upload audio', {
+      detail: 'Đang chuẩn bị file…',
+      estimatedMs: estimateApiMsFromDuration(timerRef.current || timer, 'upload'),
+    });
+    let finalizeJobId: string | null = null;
+    let uploadDone = false;
     try {
       try {
         recognitionRef.current?.stop();
@@ -634,11 +669,27 @@ export default function LiveRecordView({
         throw new Error('Không có dữ liệu âm thanh để upload');
       }
       const sizeMb = (blob.size / (1024 * 1024)).toFixed(1);
+      updateJob(uploadJobId, {
+        detail: `Đang upload ${sizeMb} MB lên cloud…`,
+      });
       setStatusMsg(`Đang upload audio (${sizeMb} MB) lên cloud...`);
       await recordingsApi.uploadAudio(idToSave, blob, (pct) => {
+        updateJob(uploadJobId, {
+          progress: pct,
+          detail: `Upload audio… ${pct}%`,
+        });
         setStatusMsg(`Đang upload audio... ${pct}%`);
       });
+      completeJob(uploadJobId, 'Audio đã lưu');
+      uploadDone = true;
 
+      finalizeJobId = startJob('Lưu transcript', {
+        detail: 'Ghi metadata + transcript lên Firestore…',
+        estimatedMs: Math.min(
+          25_000,
+          Math.max(4_000, 3_000 + (linesRef.current.length || 1) * 120),
+        ),
+      });
       setStatusMsg('Audio OK — đang lưu transcript lên Firestore...');
       const saved = await recordingsApi.finalize(idToSave, {
         title:
@@ -655,11 +706,14 @@ export default function LiveRecordView({
         ),
         generateSummary: false,
       });
+      completeJob(finalizeJobId, 'Đã lưu transcript');
 
       await cleanup();
       onSaveRecording(saved);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Lưu thất bại';
+      if (!uploadDone) failJob(uploadJobId, msg.slice(0, 120));
+      if (finalizeJobId) failJob(finalizeJobId, msg.slice(0, 120));
       setStatusMsg(
         `${msg} — transcript chưa ghi DB (cần audio thành công trước).`,
       );
@@ -834,152 +888,173 @@ export default function LiveRecordView({
       </div>
 
       <div className="flex-1 min-h-0 flex flex-col p-3 md:p-4 gap-3 overflow-hidden">
-        <section className="bg-white dark:bg-slate-900 px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 flex flex-col gap-2 shrink-0">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-            <span className="text-[10px] font-extrabold uppercase text-slate-400">
-              Ngôn ngữ ghi âm
-            </span>
-            <div className="flex gap-1 flex-wrap">
-              <button
-                type="button"
-                disabled={langLocked}
-                onClick={() => setRecordLang('en')}
-                className={`px-3 py-1.5 rounded-lg text-[11px] font-bold ${
-                  recordLang === 'en'
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-slate-100 dark:bg-slate-800'
-                } disabled:opacity-60`}
-              >
-                {recordLang === 'en' && (
-                  <Check className="w-3.5 h-3.5 inline mr-1" />
-                )}
-                Tiếng Anh
-              </button>
-              <button
-                type="button"
-                disabled={langLocked}
-                onClick={() => setRecordLang('vi')}
-                className={`px-3 py-1.5 rounded-lg text-[11px] font-bold ${
-                  recordLang === 'vi'
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-slate-100 dark:bg-slate-800'
-                } disabled:opacity-60`}
-              >
-                {recordLang === 'vi' && (
-                  <Check className="w-3.5 h-3.5 inline mr-1" />
-                )}
-                Tiếng Việt
-              </button>
+        {/* Settings bubble — collapsed by default while recording */}
+        <section className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shrink-0 overflow-hidden">
+          <button
+            type="button"
+            onClick={() => setSettingsOpen((o) => !o)}
+            className="w-full px-3.5 py-2.5 flex items-center gap-2 text-left hover:bg-slate-50 dark:hover:bg-slate-800/60 transition-colors"
+          >
+            <Settings2 className="w-4 h-4 text-blue-600 shrink-0" />
+            <div className="flex-1 min-w-0">
+              <p className="text-[10px] font-extrabold uppercase tracking-widest text-slate-400">
+                Cài đặt ghi âm
+              </p>
+              <p className="text-[11px] font-bold text-slate-700 dark:text-slate-200 truncate">
+                {recordLang === 'en' ? 'EN' : 'VI'}
+                {' · '}
+                {talkMode === 'solo' ? '1 người' : 'Hội thoại'}
+                {' · '}
+                {category}
+              </p>
             </div>
-          </div>
-          <p className="text-[10px] text-slate-500">
-            {recordLang === 'en'
-              ? 'STT tiếng Anh → hiện chữ Anh + dịch Việt.'
-              : 'STT tiếng Việt → hiện chữ tiếng Việt.'}
-          </p>
-        </section>
+            <ChevronDown
+              className={`w-4 h-4 text-slate-400 shrink-0 transition-transform ${
+                settingsOpen ? 'rotate-180' : ''
+              }`}
+            />
+          </button>
 
-        <section className="bg-white dark:bg-slate-900 px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 flex flex-col gap-2 shrink-0">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-            <span className="text-[10px] font-extrabold uppercase text-slate-400">
-              Chế độ nói
-            </span>
-            <div className="flex gap-1 flex-wrap">
-              <button
-                type="button"
-                onClick={() => setTalkMode('solo')}
-                className={`px-3 py-1.5 rounded-lg text-[11px] font-bold flex items-center gap-1.5 ${
-                  talkMode === 'solo'
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-slate-100 dark:bg-slate-800'
-                }`}
-              >
-                <User className="w-3.5 h-3.5" />1 người nói
-              </button>
-              <button
-                type="button"
-                onClick={() => setTalkMode('conversation')}
-                className={`px-3 py-1.5 rounded-lg text-[11px] font-bold flex items-center gap-1.5 ${
-                  talkMode === 'conversation'
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-slate-100 dark:bg-slate-800'
-                }`}
-              >
-                <Users className="w-3.5 h-3.5" /> Hội thoại
-              </button>
-            </div>
-          </div>
-
-          {talkMode === 'conversation' && (
-            <div className="flex flex-col sm:flex-row sm:items-center gap-2 pt-1 border-t border-slate-100 dark:border-slate-800">
-              <span className="text-[10px] font-extrabold uppercase text-slate-400">
-                Đang nói:
-              </span>
-              <div className="flex gap-1 flex-wrap">
-                <button
-                  type="button"
-                  onClick={() => setActiveSpeaker('me')}
-                  className={`px-3 py-1.5 rounded-lg text-[11px] font-bold ${
-                    activeSpeaker === 'me'
-                      ? 'bg-emerald-600 text-white'
-                      : 'bg-slate-100 dark:bg-slate-800'
-                  }`}
-                >
-                  {activeSpeaker === 'me' && (
-                    <Check className="w-3.5 h-3.5 inline mr-1" />
-                  )}
-                  {meLabel}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setActiveSpeaker('other')}
-                  className={`px-3 py-1.5 rounded-lg text-[11px] font-bold ${
-                    activeSpeaker === 'other'
-                      ? 'bg-amber-500 text-white'
-                      : 'bg-slate-100 dark:bg-slate-800'
-                  }`}
-                >
-                  {activeSpeaker === 'other' && (
-                    <Check className="w-3.5 h-3.5 inline mr-1" />
-                  )}
-                  {otherLabel}
-                </button>
-              </div>
-            </div>
-          )}
-        </section>
-
-        <section className="bg-white dark:bg-slate-900 px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 shrink-0">
-          <div className="flex items-center gap-3">
-            <span className="text-[10px] font-extrabold uppercase text-slate-400">
-              Mục đích:
-            </span>
-            <div className="flex gap-1 flex-wrap">
-              {(['Học Tiếng Anh', 'Phỏng vấn', 'Cuộc họp'] as const).map(
-                (cat) => (
+          {settingsOpen && (
+            <div className="px-3.5 pb-3 pt-0 space-y-3 border-t border-slate-100 dark:border-slate-800">
+              <div className="pt-3 space-y-1.5">
+                <span className="text-[10px] font-extrabold uppercase text-slate-400">
+                  Ngôn ngữ ghi âm
+                </span>
+                <div className="flex gap-1 flex-wrap">
                   <button
-                    key={cat}
+                    type="button"
                     disabled={langLocked}
-                    onClick={() => selectCategory(cat)}
-                    className={`px-2.5 py-1 rounded-lg text-[11px] font-bold ${
-                      category === cat
+                    onClick={() => setRecordLang('en')}
+                    className={`px-3 py-1.5 rounded-lg text-[11px] font-bold ${
+                      recordLang === 'en'
                         ? 'bg-blue-600 text-white'
                         : 'bg-slate-100 dark:bg-slate-800'
                     } disabled:opacity-60`}
                   >
-                    {category === cat && (
-                      <Check className="w-3.5 h-3.5 inline" />
-                    )}{' '}
-                    {cat}
+                    {recordLang === 'en' && (
+                      <Check className="w-3.5 h-3.5 inline mr-1" />
+                    )}
+                    Tiếng Anh
                   </button>
-                ),
-              )}
+                  <button
+                    type="button"
+                    disabled={langLocked}
+                    onClick={() => setRecordLang('vi')}
+                    className={`px-3 py-1.5 rounded-lg text-[11px] font-bold ${
+                      recordLang === 'vi'
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-slate-100 dark:bg-slate-800'
+                    } disabled:opacity-60`}
+                  >
+                    {recordLang === 'vi' && (
+                      <Check className="w-3.5 h-3.5 inline mr-1" />
+                    )}
+                    Tiếng Việt
+                  </button>
+                </div>
+                <p className="text-[10px] text-slate-500">
+                  {recordLang === 'en'
+                    ? 'STT tiếng Anh → hiện chữ Anh + dịch Việt.'
+                    : 'STT tiếng Việt → hiện chữ tiếng Việt.'}
+                </p>
+              </div>
+
+              <div className="space-y-1.5 pt-2 border-t border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] font-extrabold uppercase text-slate-400">
+                  Chế độ nói
+                </span>
+                <div className="flex gap-1 flex-wrap">
+                  <button
+                    type="button"
+                    disabled={langLocked}
+                    onClick={() => setTalkMode('solo')}
+                    className={`px-3 py-1.5 rounded-lg text-[11px] font-bold flex items-center gap-1.5 ${
+                      talkMode === 'solo'
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-slate-100 dark:bg-slate-800'
+                    } disabled:opacity-60`}
+                  >
+                    <User className="w-3.5 h-3.5" />1 người nói
+                  </button>
+                  <button
+                    type="button"
+                    disabled={langLocked}
+                    onClick={() => setTalkMode('conversation')}
+                    className={`px-3 py-1.5 rounded-lg text-[11px] font-bold flex items-center gap-1.5 ${
+                      talkMode === 'conversation'
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-slate-100 dark:bg-slate-800'
+                    } disabled:opacity-60`}
+                  >
+                    <Users className="w-3.5 h-3.5" /> Hội thoại
+                  </button>
+                </div>
+                {talkMode === 'conversation' && (
+                  <div className="space-y-1.5">
+                    <p className="text-[10px] text-slate-500 leading-relaxed">
+                      Server STT tự nhận diện người nói (Người nói 1, 2, …).
+                    </p>
+                    {autoDiarize && (
+                      <div className="flex flex-wrap gap-1.5 items-center">
+                        <span className="text-[10px] font-extrabold uppercase text-emerald-600">
+                          Đang tự nhận diện
+                        </span>
+                        {[...new Set(lines.map((l) => l.speaker))].map(
+                          (name) => {
+                            const style = speakerStyleFor(
+                              name,
+                              lines.map((l) => l.speaker),
+                            );
+                            return (
+                              <span
+                                key={name}
+                                className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${style.chip}`}
+                              >
+                                {name}
+                              </span>
+                            );
+                          },
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <div className="space-y-1.5 pt-2 border-t border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] font-extrabold uppercase text-slate-400">
+                  Mục đích
+                </span>
+                <div className="flex gap-1 flex-wrap">
+                  {(
+                    ['Học Tiếng Anh', 'Phỏng vấn', 'Cuộc họp'] as const
+                  ).map((cat) => (
+                    <button
+                      key={cat}
+                      disabled={langLocked}
+                      onClick={() => selectCategory(cat)}
+                      className={`px-2.5 py-1 rounded-lg text-[11px] font-bold ${
+                        category === cat
+                          ? 'bg-blue-600 text-white'
+                          : 'bg-slate-100 dark:bg-slate-800'
+                      } disabled:opacity-60`}
+                    >
+                      {category === cat && (
+                        <Check className="w-3.5 h-3.5 inline" />
+                      )}{' '}
+                      {cat}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="flex items-start gap-1.5 text-[11px] text-slate-500 pt-1">
+                <Info className="w-3.5 h-3.5 text-blue-500 mt-0.5 shrink-0" />
+                <span>{statusMsg}</span>
+              </div>
             </div>
-          </div>
-          <div className="flex items-center gap-1.5 text-[11px] text-slate-500">
-            <Info className="w-3.5 h-3.5 text-blue-500" />
-            <span>{statusMsg}</span>
-          </div>
+          )}
         </section>
 
         <section className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 px-4 py-2 flex items-center justify-between h-14 shrink-0">
@@ -991,7 +1066,9 @@ export default function LiveRecordView({
                 : micActive
                   ? talkMode === 'solo'
                     ? `1 người · ${meLabel}`
-                    : `Hội thoại · ${currentSpeakerLabel()}`
+                    : autoDiarize
+                      ? 'Hội thoại · tự nhận diện giọng'
+                      : `Hội thoại · ${currentSpeakerLabel()}`
                   : 'Chưa có mic'}
             </span>
           </div>
@@ -1030,24 +1107,17 @@ export default function LiveRecordView({
             className="flex-1 min-h-0 p-4 pb-6 overflow-y-auto space-y-3 overscroll-contain"
           >
             {lines.map((line, idx) => {
-              const isOther = line.speaker === otherLabel;
+              const style = speakerStyleFor(
+                line.speaker,
+                lines.map((l) => l.speaker),
+              );
               return (
                 <div
                   key={`${line.time}-${idx}-${line.text.slice(0, 12)}`}
-                  className={`p-4 rounded-xl border ${
-                    isOther
-                      ? 'border-amber-200/80 bg-amber-50/50 dark:bg-amber-950/20 dark:border-amber-900/40'
-                      : 'border-slate-100 dark:border-slate-800 bg-slate-50/40'
-                  }`}
+                  className={`p-4 rounded-xl border ${style.card}`}
                 >
                   <div className="text-[10px] font-extrabold text-slate-400 mb-2 flex items-center gap-2">
-                    <span
-                      className={
-                        isOther ? 'text-amber-600' : 'text-emerald-600'
-                      }
-                    >
-                      {line.speaker}
-                    </span>
+                    <span className={style.text}>{line.speaker}</span>
                     <span>· {line.time}</span>
                   </div>
                   {recordLang === 'en' ? (

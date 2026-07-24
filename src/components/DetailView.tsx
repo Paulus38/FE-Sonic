@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { 
   ArrowLeft, 
   Share2, 
@@ -33,6 +33,20 @@ import {
 } from '../lib/extractVocab';
 import { lookupFreeDictionary } from '../lib/freeDictionary';
 import { translateEnToVi } from '../lib/translate';
+import {
+  localizeSpeakerLabel,
+  speakerStyleFor,
+  uniqueSpeakers,
+} from '../lib/speakers';
+import {
+  getCachedVocab,
+  setCachedVocab,
+  vocabCacheKey,
+} from '../lib/vocabCache';
+import {
+  estimateApiMsFromDuration,
+  useJobProgress,
+} from './ui/JobProgress';
 
 interface DetailViewProps {
   recording: Recording;
@@ -53,6 +67,7 @@ export default function DetailView({
   onRetranscribe,
 }: DetailViewProps) {
   const { confirm } = useNotify();
+  const { runTimedJob } = useJobProgress();
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const objectUrlRef = useRef<string | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -63,6 +78,9 @@ export default function DetailView({
   const [audioError, setAudioError] = useState('');
   const [summarizing, setSummarizing] = useState(false);
   const [retranscribing, setRetranscribing] = useState(false);
+  const [retranscribeLang, setRetranscribeLang] = useState<'en' | 'vi' | null>(
+    null,
+  );
   
   // Custom display modes for English learners
   const [showBilingual, setShowBilingual] = useState(true);
@@ -81,7 +99,10 @@ export default function DetailView({
   const [keywordsList, setKeywordsList] = useState<ExtractedKeyword[]>([]);
   const [vocabLoading, setVocabLoading] = useState(false);
   const [vocabError, setVocabError] = useState('');
+  const [vocabLoaded, setVocabLoaded] = useState(false);
   const [lookingUpWord, setLookingUpWord] = useState(false);
+  const vocabRequestRef = useRef(0);
+  const vocabLoadingRef = useRef(false);
 
   // Parse time string "MM:SS" into seconds
   const parseTimeToSeconds = (timeStr: string): number => {
@@ -176,56 +197,121 @@ export default function DetailView({
     };
   }, [recording.id]);
 
-  const transcriptLines =
-    hydratedRecording?.transcript?.length
-      ? hydratedRecording.transcript
-      : recording.transcript || [];
+  const transcriptLines = useMemo(() => {
+    if (hydratedRecording?.transcript?.length) {
+      return hydratedRecording.transcript;
+    }
+    return recording.transcript ?? [];
+  }, [hydratedRecording?.transcript, recording.transcript]);
+  const transcriptSig = useMemo(
+    () => transcriptLines.map((l) => l.text).join('|'),
+    [transcriptLines],
+  );
+  const cacheKey = useMemo(
+    () => vocabCacheKey(recording.id, transcriptSig),
+    [recording.id, transcriptSig],
+  );
+  const speakerNames = uniqueSpeakers(transcriptLines.map((l) => l.speaker));
+  const participantsFromTranscript = speakerNames.map((name) => ({
+    name,
+    role: 'Người nói',
+    avatar: `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(name)}`,
+  }));
+  const participants =
+    recording.participants?.length
+      ? recording.participants
+      : participantsFromTranscript;
   const aiSummaryText =
     hydratedRecording?.aiSummary?.trim() || recording.aiSummary || '';
 
+  /** Restore session cache when opening Detail / after re-transcribe — no network. */
   useEffect(() => {
-    let cancelled = false;
-    setKeywordsList([]);
-    setVocabError('');
-
-    if (!transcriptLines.length) {
-      setVocabLoading(false);
-      return;
+    const cached = getCachedVocab(cacheKey);
+    if (cached) {
+      setKeywordsList(cached);
+      setVocabLoaded(true);
+      setVocabError(
+        cached.length
+          ? ''
+          : 'Chưa trích được từ tiếng Anh từ transcript (cần bản ghi có nội dung EN).',
+      );
+    } else {
+      setKeywordsList([]);
+      setVocabLoaded(false);
+      setVocabError('');
     }
+    setVocabLoading(false);
+  }, [cacheKey]);
 
-    setVocabLoading(true);
-    buildKeywordsFromTranscript(transcriptLines, recording.category, {
-      maxWords: 8,
-    })
-      .then((words) => {
-        if (cancelled) return;
-        setKeywordsList(words);
-        if (!words.length) {
+  const loadVocabulary = useCallback(
+    async (force = false) => {
+      if (!transcriptLines.length) {
+        setVocabError('Chưa có transcript để trích từ vựng.');
+        setVocabLoaded(true);
+        setKeywordsList([]);
+        return;
+      }
+      if (!force) {
+        const cached = getCachedVocab(cacheKey);
+        if (cached) {
+          setKeywordsList(cached);
+          setVocabLoaded(true);
           setVocabError(
-            'Chưa trích được từ tiếng Anh từ transcript (cần bản ghi có nội dung EN).',
+            cached.length
+              ? ''
+              : 'Chưa trích được từ tiếng Anh từ transcript (cần bản ghi có nội dung EN).',
           );
+          return;
         }
-      })
-      .catch((err) => {
-        if (cancelled) return;
+        if (vocabLoadingRef.current) return;
+      }
+
+      const reqId = ++vocabRequestRef.current;
+      vocabLoadingRef.current = true;
+      setVocabLoading(true);
+      setVocabError('');
+      try {
+        const words = await buildKeywordsFromTranscript(
+          transcriptLines,
+          recording.category,
+          { maxWords: 8 },
+        );
+        if (reqId !== vocabRequestRef.current) return;
+        setCachedVocab(cacheKey, words);
+        setKeywordsList(words);
+        setVocabLoaded(true);
+        setVocabError(
+          words.length
+            ? ''
+            : 'Chưa trích được từ tiếng Anh từ transcript (cần bản ghi có nội dung EN).',
+        );
+      } catch (err) {
+        if (reqId !== vocabRequestRef.current) return;
         setVocabError(
           err instanceof Error ? err.message : 'Không tra được từ vựng.',
         );
-      })
-      .finally(() => {
-        if (!cancelled) setVocabLoading(false);
-      });
+        setVocabLoaded(false);
+      } finally {
+        if (reqId === vocabRequestRef.current) {
+          vocabLoadingRef.current = false;
+          setVocabLoading(false);
+        }
+      }
+    },
+    [cacheKey, recording.category, transcriptLines],
+  );
 
-    return () => {
-      cancelled = true;
-    };
-    // Depend on recording id + transcript content signature
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [recording.id, hydratedRecording?.id, transcriptLines.map((l) => l.text).join('|')]);
+  const openVocabularyTab = () => {
+    setActiveMobileTab('vocabulary');
+    void loadVocabulary(false);
+  };
 
   const hasAudio =
     !!(hydratedRecording?.hasAudio ?? recording.hasAudio) ||
     !!(hydratedRecording?.audioUrl ?? recording.audioUrl);
+
+  const durationSec =
+    hydratedRecording?.durationSec ?? recording.durationSec ?? 0;
 
   const runRetranscribe = async (language: 'en' | 'vi') => {
     if (retranscribing || !hasAudio) return;
@@ -241,13 +327,27 @@ export default function DetailView({
       danger: hasLines,
     });
     if (!ok) return;
+    setRetranscribeLang(language);
     setRetranscribing(true);
     try {
-      await onRetranscribe(recording.id, language);
-      const full = await recordingsApi.get(recording.id);
-      setHydratedRecording(full);
+      await runTimedJob(
+        `Transcript lại (${language === 'vi' ? 'VI' : 'EN'})`,
+        async () => {
+          await onRetranscribe(recording.id, language);
+          const full = await recordingsApi.get(recording.id);
+          setHydratedRecording(full);
+        },
+        {
+          estimatedMs: estimateApiMsFromDuration(durationSec, 'transcribe'),
+          detail:
+            durationSec > 0
+              ? `Ước lượng theo ${formatTime(durationSec)} audio`
+              : 'Đang gọi STT…',
+        },
+      );
     } finally {
       setRetranscribing(false);
+      setRetranscribeLang(null);
     }
   };
 
@@ -453,7 +553,7 @@ export default function DetailView({
           Tóm tắt AI
         </button>
         <button
-          onClick={() => setActiveMobileTab('vocabulary')}
+          onClick={openVocabularyTab}
           className={`flex-1 py-2 text-xs font-extrabold rounded-lg transition-all ${
             activeMobileTab === 'vocabulary' ? 'bg-blue-600 text-white shadow-xs' : 'text-slate-500'
           }`}
@@ -480,7 +580,7 @@ export default function DetailView({
                 </p>
                 <p className="text-[11px] text-slate-500 mt-0.5 leading-relaxed">
                   {hasAudio
-                    ? 'Dùng khi realtime không nhận diện được. Sẽ thay transcript hiện tại.'
+                    ? 'Dùng khi realtime không nhận diện được. Tiến trình hiện trên popup.'
                     : 'Bản ghi này chưa có file audio — không thể transcript lại.'}
                 </p>
               </div>
@@ -491,10 +591,12 @@ export default function DetailView({
                   onClick={() => void runRetranscribe('en')}
                   className="inline-flex items-center gap-1.5 text-[10px] font-bold px-2.5 py-1.5 rounded-lg bg-violet-600 text-white disabled:opacity-50 hover:bg-violet-700"
                 >
-                  {retranscribing ? (
+                  {retranscribing && retranscribeLang === 'en' ? (
                     <Loader2 className="w-3.5 h-3.5 animate-spin" />
                   ) : null}
-                  {retranscribing ? 'Đang STT...' : 'EN → transcript'}
+                  {retranscribing && retranscribeLang === 'en'
+                    ? 'Đang STT…'
+                    : 'EN → transcript'}
                 </button>
                 <button
                   type="button"
@@ -502,7 +604,12 @@ export default function DetailView({
                   onClick={() => void runRetranscribe('vi')}
                   className="inline-flex items-center gap-1.5 text-[10px] font-bold px-2.5 py-1.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 disabled:opacity-50"
                 >
-                  VI → transcript
+                  {retranscribing && retranscribeLang === 'vi' ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : null}
+                  {retranscribing && retranscribeLang === 'vi'
+                    ? 'Đang STT…'
+                    : 'VI → transcript'}
                 </button>
               </div>
             </div>
@@ -518,9 +625,8 @@ export default function DetailView({
 
             {transcriptLines.map((line, idx) => {
               const isActive = idx === activeStatementIdx;
-              const speakerColor = idx % 2 === 0 
-                ? 'text-blue-600 dark:text-blue-400' 
-                : 'text-orange-600 dark:text-orange-400';
+              const speakerLabel = localizeSpeakerLabel(line.speaker);
+              const speakerStyle = speakerStyleFor(speakerLabel, speakerNames);
 
               return (
                 <div 
@@ -541,15 +647,15 @@ export default function DetailView({
                     }`}>
                       {line.time}
                     </span>
-                    <span className={`sm:hidden text-xs font-bold uppercase tracking-wider ${speakerColor}`}>
-                      {line.speaker}
+                    <span className={`sm:hidden text-xs font-bold uppercase tracking-wider ${speakerStyle.text}`}>
+                      {speakerLabel}
                     </span>
                   </div>
 
                   {/* Speaker and Speech Content */}
                   <div className="space-y-1.5 flex-1">
-                    <h4 className={`hidden sm:block text-xs font-bold uppercase tracking-wider ${speakerColor}`}>
-                      {line.speaker}
+                    <h4 className={`hidden sm:block text-xs font-bold uppercase tracking-wider ${speakerStyle.text}`}>
+                      {speakerLabel}
                     </h4>
                     
                     {/* English Original */}
@@ -600,9 +706,17 @@ export default function DetailView({
                 onClick={() => {
                   if (summarizing) return;
                   setSummarizing(true);
-                  void Promise.resolve(onRegenerateSummary(recording.id)).finally(
-                    () => setSummarizing(false),
-                  );
+                  void runTimedJob(
+                    'Tóm tắt AI',
+                    () => Promise.resolve(onRegenerateSummary(recording.id)),
+                    {
+                      estimatedMs: estimateApiMsFromDuration(
+                        durationSec,
+                        'summarize',
+                      ),
+                      detail: 'Gemini đang tóm tắt transcript…',
+                    },
+                  ).finally(() => setSummarizing(false));
                 }}
                 className="ml-auto text-[10px] font-bold px-2.5 py-1 rounded-md bg-blue-600 text-white disabled:opacity-60 disabled:cursor-not-allowed hover:bg-blue-700 transition-colors"
               >
@@ -637,26 +751,41 @@ export default function DetailView({
             </div>
           </section>
 
-          {/* Participants */}
+          {/* Participants — từ metadata hoặc suy ra từ speaker diarization */}
           <section className="space-y-3">
             <div className="flex items-center gap-2">
               <Users className="w-4.5 h-4.5 text-slate-500" />
               <h3 className="text-xs font-extrabold uppercase tracking-widest text-slate-800 dark:text-slate-200">Người tham gia</h3>
             </div>
             <div className="space-y-3">
-              {recording.participants && recording.participants.map((p, idx) => (
-                <div key={idx} className="flex items-center gap-3 bg-white dark:bg-slate-900 p-2 rounded-xl border border-slate-100 dark:border-slate-800">
-                  <img 
-                    src={p.avatar} 
-                    alt={p.name} 
-                    className="w-8 h-8 rounded-full object-cover border border-slate-200 dark:border-slate-800"
-                  />
-                  <div>
-                    <p className="text-xs font-bold text-slate-950 dark:text-white leading-tight">{p.name}</p>
-                    <p className="text-[9px] text-slate-500 dark:text-slate-400 font-bold mt-0.5 uppercase tracking-wider">{p.role}</p>
+              {participants.length === 0 && (
+                <p className="text-xs text-slate-500">
+                  Chưa nhận diện được người nói. Thử transcript lại với STT Deepgram.
+                </p>
+              )}
+              {participants.map((p, idx) => {
+                const style = speakerStyleFor(p.name, speakerNames);
+                return (
+                  <div
+                    key={`${p.name}-${idx}`}
+                    className="flex items-center gap-3 bg-white dark:bg-slate-900 p-2 rounded-xl border border-slate-100 dark:border-slate-800"
+                  >
+                    <div
+                      className={`w-8 h-8 rounded-full flex items-center justify-center text-[10px] font-extrabold ${style.chip}`}
+                    >
+                      {(p.name.match(/\d+/)?.[0] || p.name.slice(0, 1)).toUpperCase()}
+                    </div>
+                    <div>
+                      <p className={`text-xs font-bold leading-tight ${style.text}`}>
+                        {localizeSpeakerLabel(p.name)}
+                      </p>
+                      <p className="text-[9px] text-slate-500 dark:text-slate-400 font-bold mt-0.5 uppercase tracking-wider">
+                        {p.role}
+                      </p>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </section>
 
@@ -689,19 +818,44 @@ export default function DetailView({
           <div className="flex items-center gap-2">
             <BookOpen className="w-4.5 h-4.5 text-blue-600 dark:text-blue-400" />
             <h3 className="text-xs font-extrabold uppercase tracking-widest text-slate-800 dark:text-slate-200">Từ vựng rút gọn</h3>
+            {(vocabLoaded || keywordsList.length > 0) && (
+              <button
+                type="button"
+                disabled={vocabLoading || !transcriptLines.length}
+                onClick={() => void loadVocabulary(true)}
+                className="ml-auto text-[10px] font-bold px-2 py-1 rounded-md bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 disabled:opacity-50"
+              >
+                Làm mới
+              </button>
+            )}
           </div>
           <p className="text-[10px] text-slate-500 dark:text-slate-400 -mt-3">
-            Trích từ transcript EN · nghĩa live Free Dictionary (không lưu DB)
+            Chỉ gọi Free Dictionary khi bạn trích từ / bấm vào từ trong transcript. Không lưu DB.
           </p>
 
           <div className="space-y-4">
+            {!vocabLoaded && !vocabLoading && (
+              <div className="space-y-2">
+                <p className="text-xs text-slate-500 leading-relaxed">
+                  Chưa trích từ vựng. Bấm bên dưới để lấy tối đa 8 từ EN từ transcript và tra nghĩa.
+                </p>
+                <button
+                  type="button"
+                  disabled={!transcriptLines.length || vocabLoading}
+                  onClick={() => void loadVocabulary(false)}
+                  className="w-full py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-extrabold disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Trích từ vựng
+                </button>
+              </div>
+            )}
             {vocabLoading && (
               <p className="text-xs text-slate-500 font-medium">Đang trích từ & tra nghĩa...</p>
             )}
             {!vocabLoading && vocabError && (
               <p className="text-xs text-amber-600 dark:text-amber-400 font-medium">{vocabError}</p>
             )}
-            {!vocabLoading && !vocabError && keywordsList.length === 0 && (
+            {!vocabLoading && vocabLoaded && !vocabError && keywordsList.length === 0 && (
               <p className="text-xs text-slate-500">Chưa có từ vựng để hiển thị.</p>
             )}
             {keywordsList.map((kw, idx) => (
