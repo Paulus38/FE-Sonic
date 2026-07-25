@@ -62,8 +62,8 @@ export default function AiUsageView({
     void load();
   }, [load]);
 
-  const byFeature = summary?.byFeature ?? {};
-  const byModel = summary?.byModel ?? {};
+  const byFeature: Record<string, number> = summary?.byFeature ?? {};
+  const byModel: Record<string, number> = summary?.byModel ?? {};
   const quota = quotaTokens > 0 ? quotaTokens : 1;
   const percentage = Math.min(100, (usedTokens / quota) * 100);
   const barColor =

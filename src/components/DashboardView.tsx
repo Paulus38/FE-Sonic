@@ -243,7 +243,9 @@ export default function DashboardView({
                 <p className="text-xs text-slate-400">Chưa có dữ liệu</p>
               ) : (
                 <ul className="space-y-2">
-                  {Object.entries(stats.byCategory)
+                  {(
+                    Object.entries(stats.byCategory) as Array<[string, number]>
+                  )
                     .sort((a, b) => b[1] - a[1])
                     .map(([cat, count]) => {
                       const pct =

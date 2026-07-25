@@ -129,10 +129,13 @@ export default function AnalyticsView({
   }, [recordings, dictionaryItems]);
 
   const loading = recordingsLoading || dictionaryLoading;
-  const maxCat = Math.max(
-    1,
-    ...Object.values(data.byCategory).map((c) => c.count),
-  );
+  const categoryEntries = Object.entries(data.byCategory) as Array<
+    [string, { count: number; duration: number }]
+  >;
+  const dictEntries = Object.entries(data.byDictCategory) as Array<
+    [string, number]
+  >;
+  const maxCat = Math.max(1, ...categoryEntries.map(([, c]) => c.count));
 
   return (
     <div className="flex-1 overflow-y-auto px-4 md:px-10 py-6 pb-24 bg-slate-50 dark:bg-slate-950">
@@ -211,7 +214,7 @@ export default function AnalyticsView({
               </p>
             ) : (
               <ul className="space-y-3">
-                {Object.entries(data.byCategory)
+                {categoryEntries
                   .sort((a, b) => b[1].count - a[1].count)
                   .map(([cat, info]) => (
                     <li key={cat}>
@@ -281,7 +284,7 @@ export default function AnalyticsView({
               </div>
             ) : (
               <ul className="space-y-2">
-                {Object.entries(data.byDictCategory)
+                {dictEntries
                   .sort((a, b) => b[1] - a[1])
                   .map(([cat, count]) => (
                     <li

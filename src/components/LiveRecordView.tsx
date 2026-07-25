@@ -142,6 +142,8 @@ export default function LiveRecordView({
   };
 
   const resolveSpeaker = (fromServer?: string | null) => {
+    // Solo: keep user display name even when server STT still emits Speaker N
+    if (talkModeRef.current === 'solo') return meLabel;
     if (fromServer?.trim()) return localizeSpeakerLabel(fromServer);
     return currentSpeakerLabel();
   };
@@ -628,6 +630,12 @@ export default function LiveRecordView({
     if (isRecording) setSettingsOpen(false);
   }, [isRecording]);
 
+  // Surface STT/mic errors while settings bubble is collapsed
+  const showStatusBanner =
+    !!statusMsg &&
+    (!settingsOpen ||
+      /lỗi|fail|không|denied|error|thất bại/i.test(statusMsg));
+
   const handleSave = async () => {
     if (!recordingId || saving || !isRecording) return;
     setSaving(true);
@@ -1000,22 +1008,24 @@ export default function LiveRecordView({
                         <span className="text-[10px] font-extrabold uppercase text-emerald-600">
                           Đang tự nhận diện
                         </span>
-                        {[...new Set(lines.map((l) => l.speaker))].map(
-                          (name) => {
-                            const style = speakerStyleFor(
-                              name,
-                              lines.map((l) => l.speaker),
-                            );
-                            return (
-                              <span
-                                key={name}
-                                className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${style.chip}`}
-                              >
-                                {name}
-                              </span>
-                            );
-                          },
-                        )}
+                        {(
+                          Array.from(
+                            new Set(lines.map((l) => l.speaker)),
+                          ) as string[]
+                        ).map((name) => {
+                          const style = speakerStyleFor(
+                            name,
+                            lines.map((l) => l.speaker),
+                          );
+                          return (
+                            <span
+                              key={name}
+                              className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${style.chip}`}
+                            >
+                              {name}
+                            </span>
+                          );
+                        })}
                       </div>
                     )}
                   </div>
@@ -1056,6 +1066,13 @@ export default function LiveRecordView({
             </div>
           )}
         </section>
+
+        {showStatusBanner && !settingsOpen && (
+          <div className="px-3 py-2 rounded-xl border border-blue-100 dark:border-blue-900/40 bg-blue-50/80 dark:bg-blue-950/30 flex items-start gap-1.5 text-[11px] text-slate-600 dark:text-slate-300 shrink-0">
+            <Info className="w-3.5 h-3.5 text-blue-500 mt-0.5 shrink-0" />
+            <span className="leading-relaxed">{statusMsg}</span>
+          </div>
+        )}
 
         <section className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 px-4 py-2 flex items-center justify-between h-14 shrink-0">
           <div className="flex items-center gap-2 text-[10px] text-slate-400 font-bold">

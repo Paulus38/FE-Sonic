@@ -226,6 +226,10 @@ export default function DetailView({
 
   /** Restore session cache when opening Detail / after re-transcribe — no network. */
   useEffect(() => {
+    // Invalidate in-flight vocab requests for the previous transcript
+    vocabRequestRef.current += 1;
+    vocabLoadingRef.current = false;
+
     const cached = getCachedVocab(cacheKey);
     if (cached) {
       setKeywordsList(cached);
