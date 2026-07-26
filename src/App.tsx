@@ -50,6 +50,10 @@ function mapMeToSettings(
     sampleRate: me.sampleRate,
     aiNoiseCancellation: me.aiNoiseCancellation,
     theme: me.theme,
+    job: me.job ?? null,
+    hobbies: me.hobbies ?? null,
+    habits: me.habits ?? null,
+    aboutMe: me.aboutMe ?? null,
     role: me.role || 'user',
     id: me.id,
   };
@@ -408,6 +412,10 @@ export default function App() {
       sampleRate: next.sampleRate,
       aiNoiseCancellation: next.aiNoiseCancellation,
       theme: next.theme,
+      job: next.job ?? '',
+      hobbies: next.hobbies ?? '',
+      habits: next.habits ?? '',
+      aboutMe: next.aboutMe ?? '',
     });
     setSettings(mapMeToSettings(updated));
   };

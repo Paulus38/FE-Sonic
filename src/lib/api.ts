@@ -107,6 +107,12 @@ export const aiApi = {
     apiRequest<{ items: import('../types').AiUsageSummary[] }>(
       '/api/v1/ai/usage/all',
     ),
+  /** Gợi ý câu trả lời tiếng Anh dựa trên transcript + profile cá nhân */
+  suggestReply: (body: { context: string; category?: string }) =>
+    apiRequest<{ suggestions: string[] }>('/api/v1/ai/suggest-reply', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
 };
 
 export const adminApi = {

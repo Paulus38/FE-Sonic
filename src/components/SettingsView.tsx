@@ -11,6 +11,7 @@ import {
   AlertTriangle,
   Camera,
   Loader2,
+  Sparkles,
 } from 'lucide-react';
 import { UserSettings } from '../types';
 
@@ -53,6 +54,10 @@ export default function SettingsView({
   );
   const [primaryLang, setPrimaryLang] = useState(settings.primaryLang);
   const [secondaryLang, setSecondaryLang] = useState(settings.secondaryLang);
+  const [job, setJob] = useState(settings.job || '');
+  const [hobbies, setHobbies] = useState(settings.hobbies || '');
+  const [habits, setHabits] = useState(settings.habits || '');
+  const [aboutMe, setAboutMe] = useState(settings.aboutMe || '');
   const [saving, setSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState<{
     type: 'success' | 'error';
@@ -67,6 +72,10 @@ export default function SettingsView({
     setNoiseReduction(settings.aiNoiseCancellation);
     setPrimaryLang(settings.primaryLang);
     setSecondaryLang(settings.secondaryLang);
+    setJob(settings.job || '');
+    setHobbies(settings.hobbies || '');
+    setHabits(settings.habits || '');
+    setAboutMe(settings.aboutMe || '');
   }, [settings]);
 
   useEffect(() => {
@@ -81,7 +90,11 @@ export default function SettingsView({
     sampleRate !== settings.sampleRate ||
     noiseReduction !== settings.aiNoiseCancellation ||
     primaryLang !== settings.primaryLang ||
-    secondaryLang !== settings.secondaryLang;
+    secondaryLang !== settings.secondaryLang ||
+    job !== (settings.job || '') ||
+    hobbies !== (settings.hobbies || '') ||
+    habits !== (settings.habits || '') ||
+    aboutMe !== (settings.aboutMe || '');
 
   const handleSaveChanges = async () => {
     if (!name.trim()) {
@@ -99,6 +112,10 @@ export default function SettingsView({
         aiNoiseCancellation: noiseReduction,
         primaryLang,
         secondaryLang,
+        job: job.trim(),
+        hobbies: hobbies.trim(),
+        habits: habits.trim(),
+        aboutMe: aboutMe.trim(),
       });
       setEditingAvatar(false);
       setSaveMessage({
@@ -264,6 +281,79 @@ export default function SettingsView({
                 {saving ? 'Đang lưu…' : 'Lưu thay đổi'}
               </button>
             </div>
+          </section>
+
+          <section className="bg-white dark:bg-slate-900 rounded-2xl p-6 border border-slate-200/60 dark:border-slate-800/80 shadow-sm space-y-5 transition-colors">
+            <div className="flex items-center gap-2.5">
+              <Sparkles className="w-5 h-5 text-blue-600 dark:text-blue-400" />
+              <div>
+                <h3 className="text-base font-bold text-slate-950 dark:text-white">
+                  Hồ sơ giao tiếp (gợi ý trả lời AI)
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400 font-medium">
+                  AI sẽ ưu tiên dùng những thông tin này khi gợi ý câu trả lời
+                  tiếng Anh trong lúc ghi âm.
+                </p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <label className="text-[11px] font-extrabold text-slate-500 dark:text-slate-400 uppercase tracking-widest">
+                  Công việc
+                </label>
+                <textarea
+                  value={job}
+                  onChange={(e) => setJob(e.target.value)}
+                  maxLength={500}
+                  rows={2}
+                  placeholder="VD: Lập trình viên backend tại công ty fintech, 5 năm kinh nghiệm NodeJS…"
+                  className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-4 py-2 text-sm font-medium focus:ring-2 focus:ring-blue-600 dark:text-white outline-none transition-colors resize-none"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-[11px] font-extrabold text-slate-500 dark:text-slate-400 uppercase tracking-widest">
+                  Sở thích
+                </label>
+                <textarea
+                  value={hobbies}
+                  onChange={(e) => setHobbies(e.target.value)}
+                  maxLength={500}
+                  rows={2}
+                  placeholder="VD: Chơi cầu lông, đọc sách công nghệ, du lịch…"
+                  className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-4 py-2 text-sm font-medium focus:ring-2 focus:ring-blue-600 dark:text-white outline-none transition-colors resize-none"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-[11px] font-extrabold text-slate-500 dark:text-slate-400 uppercase tracking-widest">
+                  Thói quen
+                </label>
+                <textarea
+                  value={habits}
+                  onChange={(e) => setHabits(e.target.value)}
+                  maxLength={500}
+                  rows={2}
+                  placeholder="VD: Dậy sớm chạy bộ, học tiếng Anh 30 phút mỗi tối…"
+                  className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-4 py-2 text-sm font-medium focus:ring-2 focus:ring-blue-600 dark:text-white outline-none transition-colors resize-none"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-[11px] font-extrabold text-slate-500 dark:text-slate-400 uppercase tracking-widest">
+                  Giới thiệu thêm
+                </label>
+                <textarea
+                  value={aboutMe}
+                  onChange={(e) => setAboutMe(e.target.value)}
+                  maxLength={1000}
+                  rows={2}
+                  placeholder="VD: Quê Đà Nẵng, đang sống ở TP.HCM, mục tiêu làm việc ở nước ngoài…"
+                  className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-4 py-2 text-sm font-medium focus:ring-2 focus:ring-blue-600 dark:text-white outline-none transition-colors resize-none"
+                />
+              </div>
+            </div>
+            <p className="text-[11px] text-slate-400">
+              Nhấn &quot;Lưu thay đổi&quot; ở phần trên để lưu hồ sơ giao tiếp.
+            </p>
           </section>
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
