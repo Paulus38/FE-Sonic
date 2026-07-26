@@ -14,9 +14,12 @@ import {
   Users,
   ChevronDown,
   Settings2,
+  Sparkles,
+  X,
+  RefreshCw,
 } from 'lucide-react';
 import { UserSettings, Recording, TranscriptLine } from '../types';
-import { recordingsApi } from '../lib/api';
+import { recordingsApi, aiApi } from '../lib/api';
 import { createLiveSocket, TranscriptEvent } from '../lib/liveSocket';
 import { translateEnToVi } from '../lib/translate';
 import {
@@ -112,6 +115,14 @@ export default function LiveRecordView({
   const [barsState, setBarsState] = useState<number[]>(
     Array.from({ length: 40 }, () => 20),
   );
+  const [suggestOpen, setSuggestOpen] = useState(false);
+  const [suggestLoading, setSuggestLoading] = useState(false);
+  const [suggestions, setSuggestions] = useState<string[]>([]);
+  const [suggestError, setSuggestError] = useState<string | null>(null);
+  const [copiedSuggestion, setCopiedSuggestion] = useState<number | null>(
+    null,
+  );
+  const suggestReqRef = useRef(0);
 
   const streamRef = useRef<MediaStream | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -212,6 +223,11 @@ export default function LiveRecordView({
   useEffect(() => {
     timerRef.current = timer;
   }, [timer]);
+
+  // Keep the suggestion panel (below the newest line) in view
+  useEffect(() => {
+    if (suggestOpen) scrollToBottom();
+  }, [suggestOpen, suggestions, suggestLoading, suggestError]);
 
   useEffect(() => {
     if (titleManual) return;
@@ -762,6 +778,54 @@ export default function LiveRecordView({
     void navigator.clipboard.writeText(text);
   };
 
+  /** Gợi ý trả lời tiếng Anh dựa trên transcript gần nhất + hồ sơ cá nhân */
+  const handleSuggestReply = async () => {
+    const recentLines = linesRef.current.slice(-10);
+    const parts = recentLines.map((l) => `${l.speaker}: ${l.text}`);
+    if (partialText.trim()) {
+      parts.push(`(đang nói) ${partialText.trim()}`);
+    }
+    const context = parts.join('\n').trim();
+    if (!context) {
+      setSuggestOpen(true);
+      setSuggestError('Chưa có nội dung hội thoại để gợi ý.');
+      setSuggestions([]);
+      return;
+    }
+    const reqId = ++suggestReqRef.current;
+    setSuggestOpen(true);
+    setSuggestLoading(true);
+    setSuggestError(null);
+    setCopiedSuggestion(null);
+    try {
+      const { suggestions: result } = await aiApi.suggestReply({
+        context,
+        category,
+      });
+      if (reqId !== suggestReqRef.current) return;
+      if (!result.length) {
+        setSuggestError('AI không tạo được gợi ý. Thử lại nhé.');
+        setSuggestions([]);
+      } else {
+        setSuggestions(result);
+      }
+    } catch (err) {
+      if (reqId !== suggestReqRef.current) return;
+      setSuggestError(
+        err instanceof Error ? err.message : 'Không tạo được gợi ý.',
+      );
+      setSuggestions([]);
+    } finally {
+      if (reqId === suggestReqRef.current) setSuggestLoading(false);
+    }
+  };
+
+  const copySuggestion = (text: string, idx: number) => {
+    void navigator.clipboard.writeText(text);
+    setCopiedSuggestion(idx);
+    setTimeout(() => setCopiedSuggestion((v) => (v === idx ? null : v)), 1600);
+  };
+
   const langLocked = isRecording || starting;
 
   return (
@@ -1112,13 +1176,28 @@ export default function LiveRecordView({
                 ? 'Song ngữ Anh → Việt (live)'
                 : 'Transcript tiếng Việt (live)'}
             </span>
-            <button
-              onClick={copyAll}
-              className="text-[11px] font-bold text-blue-600 flex items-center gap-1"
-            >
-              <Copy className="w-3.5 h-3.5" /> Copy
-            </button>
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => void handleSuggestReply()}
+                disabled={suggestLoading}
+                className="text-[11px] font-bold text-violet-600 dark:text-violet-400 flex items-center gap-1 disabled:opacity-50"
+                title="AI gợi ý câu trả lời tiếng Anh dựa trên hồ sơ cá nhân của bạn"
+              >
+                <Sparkles
+                  className={`w-3.5 h-3.5 ${suggestLoading ? 'animate-pulse' : ''}`}
+                />
+                {suggestLoading ? 'Đang gợi ý…' : 'Gợi ý trả lời'}
+              </button>
+              <button
+                onClick={copyAll}
+                className="text-[11px] font-bold text-blue-600 flex items-center gap-1"
+              >
+                <Copy className="w-3.5 h-3.5" /> Copy
+              </button>
+            </div>
           </div>
+
           <div
             ref={scrollRef}
             className="flex-1 min-h-0 p-4 pb-6 overflow-y-auto space-y-3 overscroll-contain"
@@ -1179,6 +1258,89 @@ export default function LiveRecordView({
                   ĐANG NÓI...
                 </span>
                 <p className="text-base font-bold mt-1">{partialText}</p>
+              </div>
+            )}
+            {suggestOpen && (
+              <div className="p-3.5 rounded-xl border border-violet-200 dark:border-violet-900/50 bg-violet-50/70 dark:bg-violet-950/20 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-extrabold uppercase tracking-widest text-violet-600 dark:text-violet-400 flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5" />
+                    Gợi ý trả lời (theo hồ sơ của bạn)
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => void handleSuggestReply()}
+                      disabled={suggestLoading}
+                      className="text-violet-500 hover:text-violet-700 disabled:opacity-50"
+                      title="Tạo gợi ý mới"
+                    >
+                      <RefreshCw
+                        className={`w-3.5 h-3.5 ${suggestLoading ? 'animate-spin' : ''}`}
+                      />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        suggestReqRef.current += 1;
+                        setSuggestOpen(false);
+                        setSuggestLoading(false);
+                      }}
+                      className="text-slate-400 hover:text-slate-600"
+                      title="Đóng"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+
+                {suggestLoading && (
+                  <p className="text-[11px] text-violet-500 font-semibold animate-pulse">
+                    AI đang soạn câu trả lời phù hợp với bạn…
+                  </p>
+                )}
+                {!suggestLoading && suggestError && (
+                  <p className="text-[11px] text-rose-600 font-semibold">
+                    {suggestError}
+                  </p>
+                )}
+                {!suggestLoading &&
+                  !suggestError &&
+                  suggestions.map((s, idx) => (
+                    <button
+                      key={idx}
+                      type="button"
+                      onClick={() => copySuggestion(s, idx)}
+                      className="w-full text-left p-3 rounded-xl bg-white dark:bg-slate-900 border border-violet-200/70 dark:border-violet-900/40 hover:border-violet-400 transition-colors group"
+                      title="Bấm để copy"
+                    >
+                      <p className="text-sm font-semibold text-slate-800 dark:text-slate-100 leading-snug">
+                        {s}
+                      </p>
+                      <span
+                        className={`text-[10px] font-bold mt-1 inline-flex items-center gap-1 ${
+                          copiedSuggestion === idx
+                            ? 'text-emerald-600'
+                            : 'text-violet-500 opacity-0 group-hover:opacity-100'
+                        }`}
+                      >
+                        {copiedSuggestion === idx ? (
+                          <>
+                            <Check className="w-3 h-3" /> Đã copy
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-3 h-3" /> Copy
+                          </>
+                        )}
+                      </span>
+                    </button>
+                  ))}
+                {!suggestLoading && !suggestError && !suggestions.length && (
+                  <p className="text-[11px] text-slate-500">
+                    Bấm nút làm mới để tạo gợi ý.
+                  </p>
+                )}
               </div>
             )}
             {!lines.length && !partialText && (

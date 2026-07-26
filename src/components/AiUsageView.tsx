@@ -14,6 +14,7 @@ const featureLabel: Record<string, string> = {
   summarize: 'Tóm tắt',
   translate: 'Dịch Gemini',
   transcribe: 'STT / Transcribe',
+  suggest: 'Gợi ý trả lời',
 };
 
 interface AiUsageViewProps {

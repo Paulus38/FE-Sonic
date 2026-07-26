@@ -49,6 +49,11 @@ export interface UserSettings {
   sampleRate: number;
   aiNoiseCancellation: boolean;
   theme: 'light' | 'dark';
+  /** Personal context for AI reply suggestions */
+  job?: string | null;
+  hobbies?: string | null;
+  habits?: string | null;
+  aboutMe?: string | null;
   role?: 'user' | 'admin';
   id?: string;
 }
