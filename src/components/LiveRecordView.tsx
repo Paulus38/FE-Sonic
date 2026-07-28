@@ -91,6 +91,7 @@ export default function LiveRecordView({
   const { startJob, updateJob, completeJob, failJob } = useJobProgress();
   const [isRecording, setIsRecording] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
+  const [confirmExitOpen, setConfirmExitOpen] = useState(false);
   const [timer, setTimer] = useState(0);
   const [title, setTitle] = useState(
     () => `Học Tiếng Anh - ${new Date().toLocaleDateString('vi-VN')}`,
@@ -766,6 +767,15 @@ export default function LiveRecordView({
     onCancel();
   };
 
+  /** While actively recording, confirm before discarding — easy to tap by accident. */
+  const requestCancel = () => {
+    if (isRecording) {
+      setConfirmExitOpen(true);
+      return;
+    }
+    void handleCancel();
+  };
+
   const copyAll = () => {
     const text = lines
       .map((l) => {
@@ -824,6 +834,15 @@ export default function LiveRecordView({
     void navigator.clipboard.writeText(text);
     setCopiedSuggestion(idx);
     setTimeout(() => setCopiedSuggestion((v) => (v === idx ? null : v)), 1600);
+    // Give enough time to read the reply out loud, then auto-close so it
+    // doesn't linger on screen forever.
+    const reqId = suggestReqRef.current;
+    setTimeout(() => {
+      if (reqId !== suggestReqRef.current) return;
+      suggestReqRef.current += 1;
+      setSuggestOpen(false);
+      setSuggestLoading(false);
+    }, 4000);
   };
 
   const langLocked = isRecording || starting;
@@ -833,7 +852,7 @@ export default function LiveRecordView({
       <header className="px-4 md:px-8 h-16 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between shrink-0">
         <div className="flex items-center gap-3">
           <button
-            onClick={() => void handleCancel()}
+            onClick={requestCancel}
             className="p-2 -ml-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800"
           >
             <ArrowLeft className="w-5 h-5" />
@@ -888,7 +907,7 @@ export default function LiveRecordView({
         <div className="flex items-center justify-between w-full max-w-4xl mx-auto gap-3">
           <button
             type="button"
-            onClick={() => void handleCancel()}
+            onClick={requestCancel}
             className="flex flex-col items-center text-[10px] font-bold text-slate-500 min-w-[52px]"
           >
             <div className="w-10 h-10 rounded-full border border-slate-200 dark:border-slate-700 flex items-center justify-center">
@@ -1355,6 +1374,40 @@ export default function LiveRecordView({
           </div>
         </section>
       </div>
+
+      {confirmExitOpen && (
+        <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl max-w-sm w-full overflow-hidden shadow-2xl">
+            <div className="p-5 space-y-1.5">
+              <h3 className="font-extrabold text-base text-slate-900 dark:text-white">
+                Thoát bản ghi đang ghi?
+              </h3>
+              <p className="text-sm text-slate-500 dark:text-slate-400">
+                Toàn bộ nội dung đã ghi sẽ bị huỷ và không thể khôi phục.
+              </p>
+            </div>
+            <div className="flex border-t border-slate-100 dark:border-slate-800">
+              <button
+                type="button"
+                onClick={() => setConfirmExitOpen(false)}
+                className="flex-1 py-3.5 text-sm font-bold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 border-r border-slate-100 dark:border-slate-800"
+              >
+                Tiếp tục ghi âm
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setConfirmExitOpen(false);
+                  void handleCancel();
+                }}
+                className="flex-1 py-3.5 text-sm font-bold text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/30"
+              >
+                Huỷ bản ghi
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

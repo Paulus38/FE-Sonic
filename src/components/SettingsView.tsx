@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Bell,
   Settings,
@@ -14,6 +14,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { UserSettings } from '../types';
+import { usersApi } from '../lib/api';
 
 const PRIMARY_LANGS = [
   'Tiếng Việt',
@@ -63,7 +64,8 @@ export default function SettingsView({
     type: 'success' | 'error';
     text: string;
   } | null>(null);
-  const [editingAvatar, setEditingAvatar] = useState(false);
+  const [avatarUploading, setAvatarUploading] = useState(false);
+  const avatarInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     setName(settings.name);
@@ -117,7 +119,6 @@ export default function SettingsView({
         habits: habits.trim(),
         aboutMe: aboutMe.trim(),
       });
-      setEditingAvatar(false);
       setSaveMessage({
         type: 'success',
         text: 'Đã cập nhật thông tin cài đặt.',
@@ -132,6 +133,27 @@ export default function SettingsView({
       });
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleAvatarFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setAvatarUploading(true);
+    setSaveMessage(null);
+    try {
+      const updated = await usersApi.uploadAvatar(file);
+      setAvatar(updated.avatar || '');
+      await onUpdateSettings(updated);
+      setSaveMessage({ type: 'success', text: 'Đã cập nhật ảnh đại diện.' });
+    } catch (err) {
+      setSaveMessage({
+        type: 'error',
+        text: err instanceof Error ? err.message : 'Upload ảnh thất bại.',
+      });
+    } finally {
+      setAvatarUploading(false);
     }
   };
 
@@ -195,7 +217,9 @@ export default function SettingsView({
           <section className="bg-white dark:bg-slate-900 rounded-2xl p-6 border border-slate-200/60 dark:border-slate-800/80 shadow-sm flex flex-col md:flex-row gap-6 items-start transition-colors">
             <div className="relative group shrink-0">
               <div className="w-24 h-24 rounded-full overflow-hidden border-4 border-slate-100 dark:border-slate-800 flex items-center justify-center bg-blue-100 dark:bg-slate-800 shadow-inner">
-                {(avatar || settings.avatar) ? (
+                {avatarUploading ? (
+                  <Loader2 className="w-6 h-6 text-blue-600 animate-spin" />
+                ) : avatar || settings.avatar ? (
                   <img
                     src={avatar || settings.avatar}
                     alt={name}
@@ -209,12 +233,20 @@ export default function SettingsView({
               </div>
               <button
                 type="button"
-                onClick={() => setEditingAvatar((v) => !v)}
-                className="absolute bottom-0 right-0 bg-blue-600 hover:bg-blue-700 text-white p-2 rounded-full shadow-md border-2 border-white dark:border-slate-900 hover:scale-110 transition-all cursor-pointer"
+                onClick={() => avatarInputRef.current?.click()}
+                disabled={avatarUploading}
+                className="absolute bottom-0 right-0 bg-blue-600 hover:bg-blue-700 text-white p-2 rounded-full shadow-md border-2 border-white dark:border-slate-900 hover:scale-110 transition-all cursor-pointer disabled:opacity-50"
                 title="Đổi ảnh đại diện"
               >
                 <Camera className="w-4 h-4" />
               </button>
+              <input
+                ref={avatarInputRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={(e) => void handleAvatarFile(e)}
+              />
             </div>
 
             <div className="flex-1 space-y-5 w-full">
@@ -226,21 +258,6 @@ export default function SettingsView({
                   Chỉnh sửa tên, ảnh và thông tin hiển thị trên hệ thống.
                 </p>
               </div>
-
-              {editingAvatar && (
-                <div className="space-y-1.5">
-                  <label className="text-[11px] font-extrabold text-slate-500 dark:text-slate-400 uppercase tracking-widest">
-                    URL ảnh đại diện
-                  </label>
-                  <input
-                    type="url"
-                    value={avatar}
-                    onChange={(e) => setAvatar(e.target.value)}
-                    placeholder="https://..."
-                    className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-4 py-2 text-sm font-semibold focus:ring-2 focus:ring-blue-600 dark:text-white outline-none transition-colors"
-                  />
-                </div>
-              )}
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="space-y-1.5">

@@ -378,10 +378,10 @@ export default function LibraryView({
                   {/* Avatars */}
                   <div className="flex -space-x-1.5 items-center">
                     {rec.participants && rec.participants.slice(0, 3).map((p, idx) => (
-                      <img 
+                      <img
                         key={idx}
-                        src={p.avatar} 
-                        alt={p.name} 
+                        src={p.avatar || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(p.name)}`}
+                        alt={p.name}
                         title={`${p.name} (${p.role})`}
                         className="w-7 h-7 rounded-full border-2 border-white dark:border-slate-900 object-cover"
                       />

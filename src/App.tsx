@@ -12,7 +12,9 @@ import AdminUsersView from './components/AdminUsersView';
 import AdminLogsView from './components/AdminLogsView';
 import DashboardView from './components/DashboardView';
 import AnalyticsView from './components/AnalyticsView';
+import HelpView from './components/HelpView';
 import { Recording, UserSettings, DictionaryItem } from './types';
+import { registerPushNotifications } from './lib/push';
 import {
   dictionaryApi,
   recordingsApi,
@@ -20,10 +22,7 @@ import {
   usersApi,
   aiApi,
 } from './lib/api';
-import {
-  Languages,
-  HelpCircle,
-} from 'lucide-react';
+import { Languages } from 'lucide-react';
 import { useNotify } from './components/ui/Notify';
 
 const emptySettings: UserSettings = {
@@ -206,6 +205,12 @@ export default function App() {
     return () => {
       cancelled = true;
     };
+  }, [token]);
+
+  // Ask for notification permission + register FCM token once logged in (native app only).
+  useEffect(() => {
+    if (!token) return;
+    void registerPushNotifications();
   }, [token]);
 
   // Load data only when the active screen needs it.
@@ -564,16 +569,7 @@ export default function App() {
           />
         );
       case 'help':
-        return (
-          <div className="flex-1 flex flex-col items-center justify-center text-center p-8 pb-24">
-            <HelpCircle className="w-14 h-14 text-blue-500 mb-4" />
-            <h2 className="font-extrabold">Sonic Scribe</h2>
-            <p className="text-sm text-slate-500 max-w-sm mt-2">
-              Nhấn Ghi âm mới, nói tiếng Anh — hệ thống chuyển lời và dịch Việt
-              realtime, rồi lưu để ôn tập.
-            </p>
-          </div>
-        );
+        return <HelpView />;
       default:
         return null;
     }

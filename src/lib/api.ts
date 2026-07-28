@@ -93,6 +93,15 @@ export const usersApi = {
         body: JSON.stringify(body),
       },
     ),
+  /** Upload ảnh từ camera/thư viện điện thoại (hoặc chọn file trên desktop) làm avatar. */
+  uploadAvatar: (file: File) => {
+    const form = new FormData();
+    form.append('file', file);
+    return apiRequest<import('../types').UserSettings & { id: string }>(
+      '/api/v1/users/me/avatar',
+      { method: 'POST', body: form },
+    );
+  },
 };
 
 export const aiApi = {
