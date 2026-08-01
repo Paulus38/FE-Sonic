@@ -30,6 +30,11 @@ import {
   preferServerStt,
 } from '../lib/mobileStt';
 import {
+  enableBackgroundRecording,
+  disableBackgroundRecording,
+  renderRecordingNotification,
+} from '../lib/backgroundMode';
+import {
   localizeSpeakerLabel,
   speakerStyleFor,
 } from '../lib/speakers';
@@ -143,6 +148,8 @@ export default function LiveRecordView({
   const recordLangRef = useRef<RecordLang>('en');
   const timerRef = useRef(0);
   const localSeqRef = useRef(0);
+  const handleSaveRef = useRef<() => void>(() => {});
+  const togglePauseRef = useRef<() => void>(() => {});
 
   const meLabel = settings.name?.trim() || 'Bạn';
   /** Server STT + hội thoại → Deepgram tự tách người nói */
@@ -207,6 +214,7 @@ export default function LiveRecordView({
     socketRef.current = null;
     setMicActive(false);
     setIsRecording(false);
+    void disableBackgroundRecording();
   }, []);
 
   useEffect(() => {
@@ -246,7 +254,13 @@ export default function LiveRecordView({
   useEffect(() => {
     let interval: ReturnType<typeof setInterval> | undefined;
     if (isRecording && !isPaused && !saving) {
-      interval = setInterval(() => setTimer((t) => t + 1), 1000);
+      interval = setInterval(() => {
+        setTimer((t) => {
+          const next = t + 1;
+          void renderRecordingNotification(formatTimer(next), false);
+          return next;
+        });
+      }, 1000);
     }
     return () => {
       if (interval) clearInterval(interval);
@@ -258,6 +272,33 @@ export default function LiveRecordView({
       void cleanup();
     };
   }, [cleanup]);
+
+  // Native actions on the background-recording notification (see
+  // mobile/android/.../MainActivity.java + RecordingNotificationPlugin)
+  // dispatch these window events so recording can be paused/stopped
+  // without reopening the app.
+  useEffect(() => {
+    const onStopRequested = () => handleSaveRef.current();
+    const onTogglePauseRequested = () => togglePauseRef.current();
+    window.addEventListener(
+      'sonicScribeStopRecordingRequested',
+      onStopRequested,
+    );
+    window.addEventListener(
+      'sonicScribeTogglePauseRequested',
+      onTogglePauseRequested,
+    );
+    return () => {
+      window.removeEventListener(
+        'sonicScribeStopRecordingRequested',
+        onStopRequested,
+      );
+      window.removeEventListener(
+        'sonicScribeTogglePauseRequested',
+        onTogglePauseRequested,
+      );
+    };
+  }, []);
 
   const startRecording = async () => {
     if (isRecording || starting || saving) return;
@@ -583,6 +624,7 @@ export default function LiveRecordView({
       pausedRef.current = false;
       setIsPaused(false);
       setIsRecording(true);
+      void enableBackgroundRecording();
       if (useServerStt) {
         setStatusMsg(
           lang === 'vi'
@@ -624,6 +666,10 @@ export default function LiveRecordView({
       mediaRecorderRef.current?.pause();
       socketRef.current?.emit('session.pause');
       setStatusMsg('Đã tạm dừng');
+      void renderRecordingNotification(
+        `Đã tạm dừng — ${formatTimer(timerRef.current)}`,
+        true,
+      );
     } else {
       mediaRecorderRef.current?.resume();
       socketRef.current?.emit('session.resume');
@@ -639,8 +685,10 @@ export default function LiveRecordView({
           ? 'Đang nghe (server STT)...'
           : 'Đang nghe realtime...',
       );
+      void renderRecordingNotification(formatTimer(timerRef.current), false);
     }
   };
+  togglePauseRef.current = togglePause;
 
   useEffect(() => {
     // Khi đang ghi: thu gọn settings để nhường chỗ transcript
@@ -674,13 +722,21 @@ export default function LiveRecordView({
       if (mediaRecorderRef.current?.state !== 'inactive') {
         await new Promise<void>((resolve) => {
           const rec = mediaRecorderRef.current!;
-          rec.onstop = () => resolve();
+          // Some OEM WebViews (e.g. ColorOS/Realme) can throttle media
+          // events while the app is backgrounded and never fire 'onstop',
+          // which would otherwise hang the save flow forever.
+          const timeout = setTimeout(resolve, 4000);
+          rec.onstop = () => {
+            clearTimeout(timeout);
+            resolve();
+          };
           try {
             if (rec.state === 'recording') {
               rec.requestData();
             }
             rec.stop();
           } catch {
+            clearTimeout(timeout);
             resolve();
           }
         });
@@ -754,6 +810,7 @@ export default function LiveRecordView({
       }
     }
   };
+  handleSaveRef.current = handleSave;
 
   const handleCancel = async () => {
     await cleanup();
