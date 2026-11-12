@@ -1,4 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { Capacitor } from '@capacitor/core';
+import { Directory, Filesystem } from '@capacitor/filesystem';
+import { Share } from '@capacitor/share';
 import { 
   ArrowLeft, 
   Share2, 
@@ -26,6 +29,11 @@ import {
 } from 'lucide-react';
 import { Recording, DictionaryItem } from '../types';
 import { recordingsApi } from '../lib/api';
+import {
+  blobToBase64,
+  convertAudioToMp3,
+  mp3Filename,
+} from '../lib/mp3Export';
 import { useNotify } from './ui/Notify';
 import {
   ExtractedKeyword,
@@ -66,7 +74,7 @@ export default function DetailView({
   onRegenerateSummary,
   onRetranscribe,
 }: DetailViewProps) {
-  const { confirm } = useNotify();
+  const { confirm, toast } = useNotify();
   const { runTimedJob } = useJobProgress();
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const objectUrlRef = useRef<string | null>(null);
@@ -76,6 +84,8 @@ export default function DetailView({
   const [volume, setVolume] = useState<number>(80);
   const [audioReady, setAudioReady] = useState(false);
   const [audioError, setAudioError] = useState('');
+  const [downloadingMp3, setDownloadingMp3] = useState(false);
+  const [mp3Progress, setMp3Progress] = useState(0);
   const [summarizing, setSummarizing] = useState(false);
   const [retranscribing, setRetranscribing] = useState(false);
   const [retranscribeLang, setRetranscribeLang] = useState<'en' | 'vi' | null>(
@@ -355,6 +365,48 @@ export default function DetailView({
     }
   };
 
+  const handleDownloadMp3 = async () => {
+    if (!hasAudio || downloadingMp3) return;
+    setDownloadingMp3(true);
+    setMp3Progress(0);
+    try {
+      const source = await recordingsApi.fetchAudioBlob(recording.id);
+      const mp3 = await convertAudioToMp3(source, setMp3Progress);
+      const filename = mp3Filename(recording.title);
+      if (Capacitor.isNativePlatform()) {
+        const { uri } = await Filesystem.writeFile({
+          path: filename,
+          data: await blobToBase64(mp3),
+          directory: Directory.Cache,
+        });
+        await Share.share({
+          title: recording.title,
+          dialogTitle: 'Lưu bản ghi MP3',
+          files: [uri],
+        });
+        toast('Đã tạo MP3 — chọn nơi lưu trong bảng chia sẻ.', 'success');
+      } else {
+        const url = URL.createObjectURL(mp3);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+        toast('Đã tải bản ghi MP3.', 'success');
+      }
+    } catch (err) {
+      toast(
+        err instanceof Error ? err.message : 'Không thể tạo file MP3.',
+        'error',
+      );
+    } finally {
+      setDownloadingMp3(false);
+      setMp3Progress(0);
+    }
+  };
+
   const togglePlay = () => {
     const audio = audioRef.current;
     if (!audio) return;
@@ -529,6 +581,25 @@ export default function DetailView({
           >
             <Languages className="w-3.5 h-3.5" />
             <span>{showBilingual ? 'Song ngữ: Bật' : 'Song ngữ: Tắt'}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => void handleDownloadMp3()}
+            disabled={!hasAudio || downloadingMp3}
+            className="flex items-center justify-center gap-1.5 px-3 py-2 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-bold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-50 min-h-[38px]"
+            title="Tải bản ghi xuống dạng MP3"
+          >
+            {downloadingMp3 ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <Download className="w-4 h-4" />
+            )}
+            <span className="hidden xs:inline">
+              {downloadingMp3
+                ? `Đang tạo MP3 ${mp3Progress}%…`
+                : 'Tải MP3'}
+            </span>
           </button>
 
           <button className="flex items-center justify-center gap-1.5 px-3 py-2 border border-slate-200 dark:border-slate-800 rounded-xl text-xs font-bold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 min-h-[38px]">

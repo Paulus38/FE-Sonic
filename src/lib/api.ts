@@ -442,18 +442,15 @@ export const recordingsApi = {
     });
   },
   /** GET /:id/audio → blob URL để <audio> phát lại */
-  fetchAudioObjectUrl: async (id: string) => {
-    const token = localStorage.getItem('sonic_token');
-    const base =
-      import.meta.env.VITE_API_URL?.replace(/\/$/, '') ||
-      'http://localhost:3001';
-    const res = await authenticatedFetch(`/api/v1/recordings/${id}/audio`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    });
+  fetchAudioBlob: async (id: string) => {
+    const res = await authenticatedFetch(`/api/v1/recordings/${id}/audio`);
     if (!res.ok) {
-      throw new Error('Không tải được file âm thanh');
+      throw new Error(`Không tải được file âm thanh (${res.status})`);
     }
-    const blob = await res.blob();
+    return res.blob();
+  },
+  fetchAudioObjectUrl: async (id: string) => {
+    const blob = await recordingsApi.fetchAudioBlob(id);
     return URL.createObjectURL(blob);
   },
   /** DELETE /:id — hủy phiên / xóa thư viện */
