@@ -25,7 +25,7 @@ export default function AuthView({ onAuthenticated }: AuthViewProps) {
         mode === 'login'
           ? await authApi.login({ email, password })
           : await authApi.register({ name, email, password });
-      setToken(result.accessToken);
+      setToken(result.accessToken, result.refreshToken ?? null);
       onAuthenticated(result.user, result.accessToken);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Đăng nhập thất bại');

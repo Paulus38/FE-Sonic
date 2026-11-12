@@ -258,6 +258,16 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [toast]);
 
+  useEffect(() => {
+    const handleExpiredSession = () => {
+      setToken(null);
+      setTokenState(null);
+    };
+    window.addEventListener('sonic-auth-expired', handleExpiredSession);
+    return () =>
+      window.removeEventListener('sonic-auth-expired', handleExpiredSession);
+  }, []);
+
   if (!token) {
     return (
       <AuthView

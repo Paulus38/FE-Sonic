@@ -12,13 +12,104 @@ function getToken(): string | null {
   return localStorage.getItem('sonic_token');
 }
 
-export function setToken(token: string | null) {
-  if (token) localStorage.setItem('sonic_token', token);
-  else localStorage.removeItem('sonic_token');
+export function setToken(token: string | null, refreshToken?: string | null) {
+  if (!token) {
+    localStorage.removeItem('sonic_token');
+    localStorage.removeItem('sonic_refresh_token');
+    return;
+  }
+  localStorage.setItem('sonic_token', token);
+  if (refreshToken !== undefined) {
+    if (refreshToken) localStorage.setItem('sonic_refresh_token', refreshToken);
+    else localStorage.removeItem('sonic_refresh_token');
+  }
 }
 
 export function getApiBase() {
   return API_BASE;
+}
+
+type AuthTokens = {
+  accessToken: string;
+  refreshToken: string;
+};
+
+function getRefreshToken(): string | null {
+  return localStorage.getItem('sonic_refresh_token');
+}
+
+let refreshInFlight: Promise<string | null> | null = null;
+
+function expireSession() {
+  setToken(null);
+  window.dispatchEvent(new Event('sonic-auth-expired'));
+}
+
+async function refreshAccessToken(): Promise<string | null> {
+  if (!refreshInFlight) {
+    const refreshToken = getRefreshToken();
+    if (!refreshToken) return null;
+
+    refreshInFlight = (async () => {
+      const res = await fetch(`${API_BASE}/api/v1/auth/refresh`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refreshToken }),
+      });
+      if (!res.ok) {
+        if (res.status === 401 || res.status === 400) {
+          expireSession();
+          return null;
+        }
+        throw new Error(`Token refresh failed (${res.status})`);
+      }
+
+      const payload = (await res.json()) as ApiEnvelope<AuthTokens>;
+      if (
+        payload.success !== true ||
+        !payload.data?.accessToken ||
+        !payload.data.refreshToken
+      ) {
+        expireSession();
+        return null;
+      }
+
+      setToken(payload.data.accessToken, payload.data.refreshToken);
+      return payload.data.accessToken;
+    })().finally(() => {
+      refreshInFlight = null;
+    });
+  }
+  return refreshInFlight;
+}
+
+async function authenticatedFetch(
+  path: string,
+  options: RequestInit = {},
+  originalHeaders: Headers = new Headers(options.headers || {}),
+): Promise<Response> {
+  const send = (token: string | null) => {
+    const headers = new Headers(originalHeaders);
+    if (token) headers.set('Authorization', `Bearer ${token}`);
+    else headers.delete('Authorization');
+    return fetch(`${API_BASE}${path}`, { ...options, headers });
+  };
+  const token = getToken();
+  const res = await send(token);
+  const isAuthEndpoint = /^\/api\/v1\/auth\/(login|register|refresh)(?:\?|$)/.test(
+    path,
+  );
+  if (res.status !== 401 || isAuthEndpoint) return res;
+
+  const latestToken = getToken();
+  if (latestToken && latestToken !== token) return send(latestToken);
+  if (!getRefreshToken()) {
+    expireSession();
+    return res;
+  }
+
+  const refreshedToken = await refreshAccessToken();
+  return refreshedToken ? send(refreshedToken) : res;
 }
 
 export async function apiRequest<T>(
@@ -32,10 +123,7 @@ export async function apiRequest<T>(
   const token = getToken();
   if (token) headers.set('Authorization', `Bearer ${token}`);
 
-  const res = await fetch(`${API_BASE}${path}`, {
-    ...options,
-    headers,
-  });
+  const res = await authenticatedFetch(path, options, headers);
 
   if (res.status === 204) {
     return undefined as T;
@@ -57,6 +145,7 @@ export const authApi = {
   register: (body: { name: string; email: string; password: string }) =>
     apiRequest<{
       accessToken: string;
+      refreshToken: string;
       user: import('../types').UserSettings & { id: string };
     }>('/api/v1/auth/register', {
       method: 'POST',
@@ -65,6 +154,7 @@ export const authApi = {
   login: (body: { email: string; password: string }) =>
     apiRequest<{
       accessToken: string;
+      refreshToken: string;
       user: import('../types').UserSettings & { id: string };
     }>('/api/v1/auth/login', {
       method: 'POST',
@@ -357,7 +447,7 @@ export const recordingsApi = {
     const base =
       import.meta.env.VITE_API_URL?.replace(/\/$/, '') ||
       'http://localhost:3001';
-    const res = await fetch(`${base}/api/v1/recordings/${id}/audio`, {
+    const res = await authenticatedFetch(`/api/v1/recordings/${id}/audio`, {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     });
     if (!res.ok) {
